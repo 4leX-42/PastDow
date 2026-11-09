@@ -33,3 +33,5 @@ dotnet build -c Release
 &nbsp;
 
 <sub>A front end for yt-dlp (Unlicense), FFmpeg (GPL) and Deno (MIT), run as separate programs · not affiliated with them · built with the help of AI · MIT licence · download only what you have the right to</sub>
+
+<sub>Code signing: applied for free code signing for open source by <a href="https://signpath.org">SignPath Foundation</a>, certificate by SignPath Foundation once approved</sub>
