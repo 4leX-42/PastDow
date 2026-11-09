@@ -59,7 +59,7 @@ namespace Ulvark
 
             url.Box.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Enqueue(); } };
             btnGo.Click += (s, e) => Enqueue();
-            btnMin.Click += (s, e) => WindowState = FormWindowState.Minimized;
+            btnMin.Click += (s, e) => MinimizeGenie();
             btnClose.Click += (s, e) => Close();
             btnMenu.Click += (s, e) => ToggleMenu();
 
@@ -106,7 +106,6 @@ namespace Ulvark
         {
             double t = clock.Elapsed.TotalSeconds, dt = Math.Min(0.05, t - lastT);
             lastT = t;
-            if (Opacity < 1) Opacity = Math.Min(1, t / 0.28);
             foreach (Control c in Controls)
                 if (c is IAnim a && c.Visible && a.Step(dt)) c.Invalidate();
             if (queue.Jobs.Any(j => j.Active)) { UpdateTitle(); Invalidate(CountRect); }
@@ -129,7 +128,13 @@ namespace Ulvark
 
         protected override void WndProc(ref Message m)
         {
-            const int WM_NCHITTEST = 0x84;
+            const int WM_NCHITTEST = 0x84, WM_SYSCOMMAND = 0x112, SC_MINIMIZE = 0xF020, SC_RESTORE = 0xF120;
+            if (m.Msg == WM_SYSCOMMAND && !animating)
+            {
+                int cmd = m.WParam.ToInt32() & 0xFFF0;
+                if (cmd == SC_MINIMIZE && WindowState == FormWindowState.Normal) { MinimizeGenie(); return; }
+                if (cmd == SC_RESTORE && WindowState == FormWindowState.Minimized) { RestoreGenie(ref m); return; }
+            }
             base.WndProc(ref m);
             if (m.Msg == WM_NCHITTEST && WindowState == FormWindowState.Normal)
             {
@@ -151,6 +156,56 @@ namespace Ulvark
             int on = 1; DwmSetWindowAttribute(Handle, 20, ref on, 4);           // dark mode
             int round = 2; DwmSetWindowAttribute(Handle, 33, ref round, 4);     // Windows 11 rounded corners
             int border = ColorTranslator.ToWin32(Color.FromArgb(28, 28, 28)); DwmSetWindowAttribute(Handle, 34, ref border, 4);
+            Genie.DisableSystemAnimation(this);
+        }
+
+        // ---------- genie: into the taskbar button and back out ----------
+        bool animating;
+
+        void MinimizeGenie()
+        {
+            animating = true;
+            try
+            {
+                Genie.LocateTarget(this).Wait(250);
+                using (var snap = Genie.Snapshot(this))
+                {
+                    Opacity = 0;
+                    Genie.Play(snap, Bounds, true);
+                }
+                WindowState = FormWindowState.Minimized;
+                Opacity = 1;
+            }
+            finally { animating = false; }
+        }
+
+        void RestoreGenie(ref Message m)
+        {
+            animating = true;
+            try
+            {
+                Opacity = 0;
+                base.WndProc(ref m);   // the real restore, invisible
+                Update();
+                Genie.LocateTarget(this).Wait(250);
+                using (var snap = Genie.Snapshot(this)) Genie.Play(snap, Bounds, false);
+                Opacity = 1;
+                Activate();
+            }
+            finally { animating = false; }
+        }
+
+        void OpenGenie()
+        {
+            animating = true;
+            try
+            {
+                Update();
+                Genie.LocateTarget(this).Wait(400);
+                using (var snap = Genie.Snapshot(this)) Genie.Play(snap, Bounds, false);
+            }
+            catch { }
+            finally { Opacity = 1; animating = false; Activate(); }
         }
 
         // ---------- layout ----------
@@ -259,6 +314,7 @@ namespace Ulvark
         {
             base.OnShown(e);
             SendMessage(url.Box.Handle, 0x1501, (IntPtr)1, "https://"); // EM_SETCUEBANNER
+            OpenGenie();
             url.Box.Focus();
             if (Environment.GetEnvironmentVariable("ULVARK_OPEN_MENU") == "1") ToggleMenu(); // screenshots and UI tests
             PrepareEngine();
