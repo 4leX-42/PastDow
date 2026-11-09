@@ -18,7 +18,7 @@ namespace Ulvark
     static class Genie
     {
         // ULVARK_GENIE_SLOW=1 plays it 6x slower (to check the frames)
-        static readonly double Duration = Environment.GetEnvironmentVariable("ULVARK_GENIE_SLOW") == "1" ? 2.9 : 0.48;
+        static readonly double Duration = Environment.GetEnvironmentVariable("ULVARK_GENIE_SLOW") == "1" ? 2.2 : 0.36;
         static Point? target;
 
         /// <summary>Taskbar button of this app (UI Automation), else the middle of the taskbar.</summary>
@@ -37,7 +37,7 @@ namespace Ulvark
                     foreach (AutomationElement b in buttons)
                     {
                         string n = b.Current.Name ?? "";
-                        if (!n.StartsWith(MainForm.AppName, StringComparison.OrdinalIgnoreCase)) continue;
+                        if (!n.StartsWith(AppForm.AppName, StringComparison.OrdinalIgnoreCase)) continue;
                         var r = b.Current.BoundingRectangle;
                         if (r.Width > 0) { target = new Point((int)(r.X + r.Width / 2), (int)(r.Y + r.Height / 2)); return; }
                     }
@@ -80,67 +80,117 @@ namespace Ulvark
             return bmp;
         }
 
-        /// <summary>Plays the effect. closing = into the button; otherwise out of it. Blocks ~0.5 s with a message pump.</summary>
-        public static void Play(Bitmap snap, Rectangle win, bool closing)
+        /// <summary>
+        /// Plays the effect. closing = into the button; otherwise out of it.
+        /// One reusable DIB section, rows scaled by hand in a managed buffer, and every frame paced by DwmFlush
+        /// so it runs at the monitor's refresh rate (60/120/144 Hz) instead of a sleep.
+        /// </summary>
+        /// handoff swaps the real window for the overlay with no gap: when closing it runs once the overlay already
+        /// shows the first frame (hide the window then); when opening it runs on the last frame (show the window).
+        public static void Play(Bitmap snap, Rectangle win, bool closing, Action handoff)
+        {
+            bool handed = false;
+            // an animation must never take the app down: on any failure the window just minimises/appears
+            try { PlayCore(snap, win, closing, () => { handed = true; handoff(); }); }
+            catch { }
+            if (!handed) handoff();
+        }
+
+        static void PlayCore(Bitmap snap, Rectangle win, bool closing, Action handoff)
         {
             var t = target ?? new Point(win.Left + win.Width / 2, Screen.PrimaryScreen.Bounds.Bottom);
             int pad = Theme.S(30);
             var area = Rectangle.Union(win, new Rectangle(t.X - pad, t.Y - pad, pad * 2, pad * 2));
-            using (var ov = new Overlay(area))
-            using (var frame = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppPArgb))
-            using (var g = Graphics.FromImage(frame))
+            int aw = area.Width, ah = area.Height, sw = snap.Width, sh = snap.Height;
+
+            var src = new int[sw * sh];
+            var sd = snap.LockBits(new Rectangle(0, 0, sw, sh), ImageLockMode.ReadOnly, PixelFormat.Format32bppPArgb);
+            for (int y = 0; y < sh; y++) Marshal.Copy(sd.Scan0 + y * sd.Stride, src, y * sw, sw);
+            snap.UnlockBits(sd);
+            var dst = new int[aw * ah];
+
+            IntPtr screen = GetDC(IntPtr.Zero), mem = CreateCompatibleDC(screen), bits;
+            var bmi = new BITMAPINFOHEADER { biSize = 40, biWidth = aw, biHeight = -ah, biPlanes = 1, biBitCount = 32 };
+            IntPtr dib = CreateDIBSection(screen, ref bmi, 0, out bits, IntPtr.Zero, 0);
+            IntPtr old = SelectObject(mem, dib);
+            try
             {
-                g.InterpolationMode = InterpolationMode.Bilinear;
-                g.PixelOffsetMode = PixelOffsetMode.Half;
-                g.CompositingMode = CompositingMode.SourceOver;
-                var sw = Stopwatch.StartNew();
-                ov.Show();
-                while (true)
+                using (var ov = new Overlay(area))
                 {
-                    double p = Math.Min(1, sw.Elapsed.TotalSeconds / Duration);
-                    double k = closing ? p : 1 - p;
-                    g.Clear(Color.Transparent);
-                    Draw(g, snap, win, t, area.Location, k);
-                    ov.Push(frame, (byte)(255 * (1 - Math.Pow(k, 6))));
-                    Application.DoEvents();
-                    if (p >= 1) break;
-                    System.Threading.Thread.Sleep(5);
+                    void Frame(double k)
+                    {
+                        Array.Clear(dst, 0, dst.Length);
+                        Render(src, sw, sh, dst, aw, ah, win, t, area.Location, k);
+                        Marshal.Copy(dst, 0, bits, dst.Length);
+                        ov.Push(screen, mem, aw, ah, (byte)(255 * (1 - Math.Pow(k, 8))));
+                    }
+                    var h = ov.Handle;                 // create the window without showing it
+                    Frame(closing ? 0 : 1);            // first frame is ready before anything becomes visible
+                    ov.Show();
+                    DwmFlush();
+                    if (closing) { handoff(); DwmFlush(); }   // overlay is on screen: now hide the real window
+                    var clock = Stopwatch.StartNew();
+                    while (true)
+                    {
+                        double p = Math.Min(1, clock.Elapsed.TotalSeconds / Duration);
+                        Frame(closing ? p : 1 - p);
+                        if (p >= 1) break;
+                        DwmFlush();   // wait for the next vblank
+                    }
+                    if (!closing) { handoff(); DwmFlush(); DwmFlush(); }   // real window composed before the overlay goes
                 }
+            }
+            finally
+            {
+                SelectObject(mem, old); DeleteObject(dib); DeleteDC(mem); ReleaseDC(IntPtr.Zero, screen);
             }
         }
 
         /// <summary>
-        /// k = 0: the window as it is; k = 1: a point on the taskbar button.
-        /// First the bottom edge pinches towards the button (sides curve in), then the body slides down into it.
+        /// k = 0: the window as it is; k = 1: gone into the button.
+        /// The edge nearest the button pinches in along an S-curve while the body slides towards it, as on macOS.
         /// </summary>
-        static void Draw(Graphics g, Bitmap snap, Rectangle win, Point t, Point origin, double k)
+        static void Render(int[] src, int sw, int sh, int[] dst, int aw, int ah, Rectangle win, Point t, Point o, double k)
         {
-            double pinch = Ease(Math.Min(1, k / 0.45));
-            double slide = Ease(Math.Max(0, (k - 0.25) / 0.75));
+            double pinch = Ease(Math.Min(1, k / 0.5));
+            double slide = Ease(Math.Max(0, (k - 0.18) / 0.82));
             bool down = t.Y >= win.Top + win.Height / 2;
-            double top = Lerp(win.Top, t.Y, down ? slide : 0), bottom = Lerp(win.Bottom, t.Y, down ? Math.Max(slide, pinch * 0.15) : slide);
-            if (!down) { top = Lerp(win.Top, t.Y, Math.Max(slide, pinch * 0.15)); bottom = Lerp(win.Bottom, t.Y, slide); }
-            double span = Math.Max(1, bottom - top);
-            int rows = (int)Math.Ceiling(span);
-            double tipHalf = Theme.S(18);
-            for (int i = 0; i < rows; i++)
+            double top, bottom;
+            if (down) { top = Lerp(win.Top, t.Y, slide); bottom = Lerp(win.Bottom, t.Y, Math.Max(slide, pinch * 0.12)); }
+            else { top = Lerp(win.Top, t.Y, Math.Max(slide, pinch * 0.12)); bottom = Lerp(win.Bottom, t.Y, slide); }
+            double span = bottom - top;
+            if (span < 1) return;
+            double tipHalf = Theme.S(16);
+            double reach = down ? Math.Max(1, t.Y - win.Top) : Math.Max(1, win.Bottom - t.Y);
+            int y0 = Math.Max(0, (int)Math.Floor(top) - o.Y), y1 = Math.Min(ah, (int)Math.Ceiling(bottom) - o.Y);
+            for (int dy = y0; dy < y1; dy++)
             {
-                double y = top + i;
-                double v = (y - top) / span;                         // 0..1 down the squeezed body
-                // how far this row is towards the button, 0 at the far edge of the window, 1 at the button
-                double d = down ? (y - win.Top) / Math.Max(1, t.Y - win.Top) : (win.Bottom - y) / Math.Max(1, win.Bottom - t.Y);
+                double y = dy + o.Y + 0.5;
+                double v = (y - top) / span;
+                if (v < 0 || v >= 1) continue;
+                double d = down ? (y - win.Top) / reach : (win.Bottom - y) / reach;
                 double c = Smooth(Math.Max(0, Math.Min(1, d))) * pinch;
-                double l = Lerp(win.Left, t.X - tipHalf, c), r = Lerp(win.Right, t.X + tipHalf, c);
-                int sy = (int)(v * snap.Height);
-                if (sy >= snap.Height) sy = snap.Height - 1;
-                var dst = new RectangleF((float)(l - origin.X), (float)(y - origin.Y), (float)Math.Max(1, r - l), 1.4f);
-                g.DrawImage(snap, dst, new RectangleF(0, sy, snap.Width, 1), GraphicsUnit.Pixel);
+                double l = Lerp(win.Left, t.X - tipHalf, c) - o.X, r = Lerp(win.Right, t.X + tipHalf, c) - o.X;
+                int li = Math.Max(0, (int)l), ri = Math.Min(aw, (int)Math.Ceiling(r));
+                if (ri <= li) continue;
+                int srow = (int)(v * sh) * sw, drow = dy * aw;
+                // 16.16 fixed-point step through the source row
+                long step = (long)(sw * 65536.0 / Math.Max(1, r - l)), acc = (long)((li - l) * step);
+                for (int x = li; x < ri; x++, acc += step)
+                {
+                    // li is l rounded down, so the first sample can land just left of the source: clamp both ends
+                    int sx = (int)(acc >> 16);
+                    if (sx < 0) sx = 0; else if (sx >= sw) sx = sw - 1;
+                    dst[drow + x] = src[srow + sx];
+                }
             }
         }
 
         static double Lerp(double a, double b, double t) => a + (b - a) * t;
         static double Smooth(double x) => x * x * (3 - 2 * x);
         static double Ease(double x) => x < 0.5 ? 4 * x * x * x : 1 - Math.Pow(-2 * x + 2, 3) / 2;
+
+        public static void Round(Bitmap b) => RoundCorners(b, Theme.S(8));
 
         static void RoundCorners(Bitmap b, int r)
         {
@@ -154,7 +204,7 @@ namespace Ulvark
                 }
         }
 
-        /// <summary>Click-through, non-activating, topmost layered window that shows premultiplied frames.</summary>
+        /// <summary>Click-through, non-activating, topmost layered window.</summary>
         sealed class Overlay : Form
         {
             readonly Rectangle area;
@@ -177,27 +227,24 @@ namespace Ulvark
                     return cp;
                 }
             }
-            public void Push(Bitmap frame, byte alpha)
+            public void Push(IntPtr screen, IntPtr mem, int w, int h, byte alpha)
             {
-                IntPtr screen = GetDC(IntPtr.Zero), mem = CreateCompatibleDC(screen), hbmp = IntPtr.Zero, old = IntPtr.Zero;
-                try
-                {
-                    hbmp = frame.GetHbitmap(Color.FromArgb(0));
-                    old = SelectObject(mem, hbmp);
-                    var size = new SIZE { cx = frame.Width, cy = frame.Height };
-                    var src = new POINT();
-                    var pos = new POINT { x = area.Left, y = area.Top };
-                    var blend = new BLENDFUNCTION { BlendOp = 0, SourceConstantAlpha = alpha, AlphaFormat = 1 };
-                    UpdateLayeredWindow(Handle, screen, ref pos, ref size, mem, ref src, 0, ref blend, 2);
-                }
-                finally
-                {
-                    if (old != IntPtr.Zero) SelectObject(mem, old);
-                    if (hbmp != IntPtr.Zero) DeleteObject(hbmp);
-                    DeleteDC(mem); ReleaseDC(IntPtr.Zero, screen);
-                }
+                var size = new SIZE { cx = w, cy = h };
+                var src = new POINT();
+                var pos = new POINT { x = area.Left, y = area.Top };
+                var blend = new BLENDFUNCTION { BlendOp = 0, SourceConstantAlpha = alpha, AlphaFormat = 1 };
+                UpdateLayeredWindow(Handle, screen, ref pos, ref size, mem, ref src, 0, ref blend, 2);
             }
         }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct BITMAPINFOHEADER
+        {
+            public int biSize, biWidth, biHeight; public short biPlanes, biBitCount;
+            public int biCompression, biSizeImage, biXPelsPerMeter, biYPelsPerMeter, biClrUsed, biClrImportant;
+        }
+        [DllImport("gdi32.dll")] static extern IntPtr CreateDIBSection(IntPtr dc, ref BITMAPINFOHEADER bmi, uint usage, out IntPtr bits, IntPtr section, uint offset);
+        [DllImport("dwmapi.dll")] static extern int DwmFlush();
 
         [StructLayout(LayoutKind.Sequential)] struct POINT { public int x, y; }
         [StructLayout(LayoutKind.Sequential)] struct SIZE { public int cx, cy; }

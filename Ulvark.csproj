@@ -12,16 +12,31 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Product>Ulvark</Product>
     <Description>Ulvark - video and audio downloader powered by yt-dlp</Description>
-    <Version>1.3.0</Version>
+    <Version>2.0.0</Version>
+    <!-- x64 only: the embedded WebView2Loader.dll is the x64 one -->
+    <PlatformTarget>x64</PlatformTarget>
     <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
   </PropertyGroup>
 
   <ItemGroup>
     <Reference Include="System.IO.Compression" />
     <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="System.Web.Extensions" />
     <Reference Include="UIAutomationClient" />
     <Reference Include="UIAutomationTypes" />
     <Reference Include="WindowsBase" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" GeneratePathProperty="true" />
+  </ItemGroup>
+
+  <!-- One portable exe: the UI page and the WebView2 SDK files travel inside it (see Embedded.cs) -->
+  <ItemGroup>
+    <EmbeddedResource Include="ui\index.html" LogicalName="ui.html" />
+    <EmbeddedResource Include="$(PkgMicrosoft_Web_WebView2)\lib\net462\Microsoft.Web.WebView2.Core.dll" LogicalName="wv2.core.dll" />
+    <EmbeddedResource Include="$(PkgMicrosoft_Web_WebView2)\lib\net462\Microsoft.Web.WebView2.WinForms.dll" LogicalName="wv2.winforms.dll" />
+    <EmbeddedResource Include="$(PkgMicrosoft_Web_WebView2)\runtimes\win-x64\native\WebView2Loader.dll" LogicalName="wv2.loader.dll" />
   </ItemGroup>
 
 </Project>

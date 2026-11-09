@@ -14,6 +14,7 @@ namespace Ulvark
         [STAThread]
         static void Main(string[] args)
         {
+            Embedded.Hook();   // before any WebView2 type is touched
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Settings.Load();
@@ -43,7 +44,11 @@ namespace Ulvark
                 }
             }
 
-            Application.Run(new MainForm(args));
+            Run(args);
         }
+
+        // separate method so Main is compiled before the WebView2 assemblies are needed
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        static void Run(string[] args) => Application.Run(new AppForm(args));
     }
 }

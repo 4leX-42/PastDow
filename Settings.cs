@@ -19,6 +19,11 @@ namespace Ulvark
         public static bool Audio;
         public static int MaxHeight;          // 0 = no cap
         public static bool SkipDone = true;   // skip what was already downloaded (archive files)
+        public static bool ChannelFolders;    // false = files go straight into the folder; true = one subfolder per channel
+        public static string VideoFormat = "mkv";   // mkv, mp4, webm
+        public static string AudioFormat = "best";  // best (source stream, no re-encode), mp3, m4a, flac, wav, opus
+        public static readonly string[] VideoFormats = { "mkv", "mp4", "webm" };
+        public static readonly string[] AudioFormats = { "best", "mp3", "m4a", "flac", "wav", "opus" };
 
         public static void Load()
         {
@@ -40,6 +45,9 @@ namespace Ulvark
                 if (d.TryGetValue("audio", out v)) Audio = v == "1";
                 if (d.TryGetValue("max_height", out v)) int.TryParse(v, out MaxHeight);
                 if (d.TryGetValue("skip_done", out v)) SkipDone = v != "0";
+                if (d.TryGetValue("channel_folders", out v)) ChannelFolders = v == "1";
+                if (d.TryGetValue("video_format", out v) && Array.IndexOf(VideoFormats, v) >= 0) VideoFormat = v;
+                if (d.TryGetValue("audio_format", out v) && Array.IndexOf(AudioFormats, v) >= 0) AudioFormat = v;
             }
             catch { }
         }
@@ -52,7 +60,8 @@ namespace Ulvark
                 File.WriteAllLines(File_, new[]
                 {
                     "video_dir=" + VideoDir, "audio_dir=" + AudioDir, "audio=" + (Audio ? "1" : "0"),
-                    "max_height=" + MaxHeight, "skip_done=" + (SkipDone ? "1" : "0")
+                    "max_height=" + MaxHeight, "skip_done=" + (SkipDone ? "1" : "0"), "channel_folders=" + (ChannelFolders ? "1" : "0"),
+                    "video_format=" + VideoFormat, "audio_format=" + AudioFormat
                 }, Encoding.UTF8);
             }
             catch { }

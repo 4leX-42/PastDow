@@ -113,7 +113,7 @@ namespace Ulvark
         /// Window background: black with a low horizon glow along the bottom edge (x.ai) and fine grain so the
         /// gradient does not band. Built once per size; every control paints its slice of it.
         /// </summary>
-        public static Bitmap Backdrop(Size size)
+        public static Bitmap Backdrop(Size size, float glow = 1f)
         {
             var bmp = new Bitmap(Math.Max(1, size.Width), Math.Max(1, size.Height));
             using (var g = Graphics.FromImage(bmp))
@@ -127,8 +127,8 @@ namespace Ulvark
                     path.AddEllipse(ell);
                     using (var pb = new PathGradientBrush(path))
                     {
-                        pb.CenterPoint = new PointF(w * 0.62f, h * 1.02f);
-                        pb.CenterColor = Color.FromArgb(70, 160, 175, 200);
+                        pb.CenterPoint = new PointF(w * 0.5f, h * 1.02f);
+                        pb.CenterColor = Color.FromArgb((int)(70 * glow), 160, 175, 200);
                         pb.SurroundColors = new[] { Color.FromArgb(0, 0, 0, 0) };
                         g.FillPath(pb, path);
                     }
@@ -138,8 +138,8 @@ namespace Ulvark
                 {
                     var cb = new ColorBlend
                     {
-                        Colors = new[] { Color.FromArgb(0, 255, 255, 255), Color.FromArgb(90, 220, 228, 240), Color.FromArgb(0, 255, 255, 255) },
-                        Positions = new[] { 0f, 0.62f, 1f }
+                        Colors = new[] { Color.FromArgb(0, 255, 255, 255), Color.FromArgb((int)(90 * glow), 220, 228, 240), Color.FromArgb(0, 255, 255, 255) },
+                        Positions = new[] { 0f, 0.5f, 1f }
                     };
                     lb.InterpolationColors = cb;
                     g.FillRectangle(lb, 0, h - S(1), w, S(1));

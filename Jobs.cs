@@ -16,7 +16,10 @@ namespace Ulvark
         public string Url;
         public bool Audio;
         public int MaxHeight;
+        public string Format;       // container / audio codec: mkv, mp4, webm / mp3, m4a, flac, wav, opus
         public bool Force;
+        static int nextId;
+        public readonly int Id = System.Threading.Interlocked.Increment(ref nextId);
         public volatile JobState State = JobState.Queued;
         public string Title;
         public double Percent;      // 0..100 of the current phase
@@ -27,6 +30,8 @@ namespace Ulvark
         public string Error;
         public Process Proc;
         public bool CancelRequested;
+        public bool EngineSuspect;  // the error looks like yt-dlp is out of date (site changed), not a user-side problem
+        public bool FixTried;       // already retried after an automatic yt-dlp update
 
         // UI-only animation state
         public readonly long Added = Environment.TickCount;
@@ -121,6 +126,27 @@ namespace Ulvark
             catch { }
         }
 
+        /// <summary>
+        /// Subtitles and thumbnails go inside the file; when a container cannot take them (WebM covers, some MP4
+        /// subtitles) yt-dlp leaves them next to it. Remove those leftovers so only the video or song remains.
+        /// </summary>
+        static void CleanSidecars(string file)
+        {
+            try
+            {
+                if (file == null || !File.Exists(file)) return;
+                string dir = Path.GetDirectoryName(file), stem = Path.GetFileNameWithoutExtension(file);
+                foreach (var f in Directory.GetFiles(dir, stem + ".*"))
+                {
+                    if (string.Equals(f, file, StringComparison.OrdinalIgnoreCase)) continue;
+                    string ext = Path.GetExtension(f).ToLowerInvariant();
+                    if (ext == ".srt" || ext == ".vtt" || ext == ".ass" || ext == ".webp" || ext == ".jpg" || ext == ".jpeg" || ext == ".png")
+                        File.Delete(f);
+                }
+            }
+            catch { }
+        }
+
         static void Exit(Job j, Process p)
         {
             int code = -1;
@@ -134,6 +160,7 @@ namespace Ulvark
                 if (j.Error == null) j.Error = "yt-dlp exited with code " + code;
             }
             j.Speed = j.Eta = "";
+            if (j.State == JobState.Done) CleanSidecars(j.File);
             try { p.Dispose(); } catch { }
             j.Proc = null;
             Finished?.Invoke(j);
@@ -165,7 +192,12 @@ namespace Ulvark
             {
                 j.State = JobState.Processing; j.Percent = 100; return;
             }
-            if (s.StartsWith("ERROR:")) j.Error = Friendly(s.Substring(6).Trim());
+            if (s.StartsWith("ERROR:"))
+            {
+                string msg = s.Substring(6).Trim();
+                j.Error = Friendly(msg);
+                j.EngineSuspect = !UserSide(msg);
+            }
         }
 
         static string Clean(string v)
@@ -174,11 +206,27 @@ namespace Ulvark
             return v == "NA" || v == "Unknown" || v.StartsWith("Unknown") ? "" : v;
         }
 
+        /// <summary>Errors an update cannot fix: wrong link, private, members-only, region, no network, no such quality.</summary>
+        static bool UserSide(string e) =>
+            e.Contains("HTTP Error 404") || e.Contains("Private video") || e.Contains("Video unavailable") || e.Contains("is not a valid URL") ||
+            e.Contains("Unsupported URL") || e.Contains("getaddrinfo") || e.Contains("timed out") || e.Contains("Requested format is not available") ||
+            e.Contains("not available in your country") || e.Contains("members-only") || e.Contains("Join this channel") ||
+            e.Contains("Sign in to confirm your age") || e.Contains("No space left") || e.Contains("Permission denied") ||
+            e.Contains("logged-in") || e.Contains("login required") || e.Contains("log in") || e.Contains("empty media response") || e.Contains("--cookies");
+
         static string Friendly(string e)
         {
             if (e.Contains("Sign in to confirm your age")) return "Age-restricted video: YouTube asks to sign in for this one";
             if (e.Contains("Sign in to confirm") && e.Contains("bot")) return "YouTube is asking to verify you are not a bot · try again in a while";
             if (e.Contains("Private video")) return "Private video";
+            if (e.Contains("HTTP Error 404")) return "Page not found · check the link";
+            if (e.Contains("HTTP Error 403")) return "The site refused the download · try again later";
+            if (e.Contains("Unable to download webpage") || e.Contains("getaddrinfo") || e.Contains("timed out")) return "Could not reach that page · check the link or your connection";
+            if (e.Contains("Requested format is not available")) return "That quality is not available for this video · try BEST";
+            if (e.Contains("is not available in your country") || e.Contains("geo")) return "Not available in your country";
+            if (e.Contains("members-only") || e.Contains("Join this channel")) return "Members-only video";
+            if (e.Contains("logged-in") || e.Contains("login required") || e.Contains("log in") || e.Contains("empty media response") || e.Contains("--cookies"))
+                return "This one needs a login · Ulvark downloads public content only";
             if (e.Contains("Video unavailable")) return "Video unavailable";
             if (e.Contains("is not a valid URL") || e.Contains("Unsupported URL")) return "Unsupported link";
             return e.Length > 160 ? e.Substring(0, 160) + "…" : e;
@@ -205,17 +253,23 @@ namespace Ulvark
                 "--continue", "--no-mtime",
                 "--ignore-errors" // a failing subtitle (e.g. HTTP 429) must not fail the whole video
             };
+            string fmt = j.Format ?? (j.Audio ? "best" : "mkv");   // audio best = keep the source codec, no re-encode
             if (j.Audio)
             {
-                a.AddRange(new[] { "-f", "ba/b", "-x", "--audio-format", "mp3", "--audio-quality", "0",
-                    "-o", "%(uploader,channel,uploader_id|Various)s/%(title).150B.%(ext)s" });
+                a.AddRange(new[] { "-f", "ba/b", "-x", "--audio-format", fmt, "--audio-quality", "0",
+                    "-o", (Settings.ChannelFolders ? "%(uploader,channel,uploader_id|Various)s/" : "") + "%(title).150B.%(ext)s" });
+                if (fmt == "wav") a.Remove("--embed-thumbnail");   // WAV has nowhere to keep a cover
             }
             else
             {
+                // same resolution and fps first; then prefer streams that fit the container without re-encoding
+                if (fmt == "webm") a.Remove("--embed-thumbnail");   // WebM cannot hold a cover image
+                string sort = fmt == "mp4" ? "res,fps,hdr,ext:mp4:m4a" : fmt == "webm" ? "res,fps,hdr,ext:webm:webm" : "res,fps,hdr,vcodec,br";
                 a.AddRange(new[] { "-f", j.MaxHeight > 0 ? $"bv*[height<={j.MaxHeight}]+ba/b[height<={j.MaxHeight}]" : "bv*+ba/b",
-                    "-S", "res,fps,hdr,vcodec,br", "--merge-output-format", "mkv", "--remux-video", "mkv",
-                    "--embed-chapters", "--embed-subs", "--sub-langs", "es,en,es-orig,en-orig", "--write-subs", "--write-auto-subs", "--convert-subs", "srt",
-                    "-o", "%(uploader,channel,uploader_id,playlist_uploader|Various)s/%(title).150B [%(id)s].%(ext)s" });
+                    "-S", sort, "--merge-output-format", fmt, "--remux-video", fmt,
+                    "--embed-chapters", "--embed-subs", "--sub-langs", "es,en,es-orig,en-orig", "--write-subs", "--write-auto-subs",
+                    "--convert-subs", fmt == "webm" ? "vtt" : "srt",
+                    "-o", (Settings.ChannelFolders ? "%(uploader,channel,uploader_id,playlist_uploader|Various)s/" : "") + "%(title).150B [%(id)s].%(ext)s" });
             }
             if (j.Force) a.Add("--force-overwrites");
             else
