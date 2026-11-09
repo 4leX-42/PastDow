@@ -70,7 +70,7 @@ namespace Ulvark
             mode.Changed += (s, e) => { Settings.Audio = mode.Selected == 1; quality.Enabled = !Settings.Audio; UpdateFooter(); Settings.Save(); };
             quality.Changed += (s, e) => { Settings.MaxHeight = Heights[quality.Selected]; Settings.Save(); };
 
-            queue.Empty = new[] { "Nothing here yet.", "Paste a link above or drop it on the window. You can paste several at once." };
+            queue.Empty = new[] { "Nothing here yet", "Paste a link above or drop it on the window · several at once works too" };
             queue.ItemDoubleClick += OpenJob;
             queue.ItemClick += (j, e) => { if (e.Button == MouseButtons.Right) ShowMenu(j, e.Location); };
             queue.MouseDown += (s, e) => CloseMenu();
