@@ -23,7 +23,7 @@ namespace Ulvark
             {
                 using (var f = new SetupForm(SetupForm.Kind.Uninstall))
                 {
-                    f.OnContinue = () => { Installer.Uninstall(); return null; };
+                    f.OnContinue = report => { Installer.Uninstall(); System.Threading.Thread.Sleep(400); return null; };
                     f.ShowDialog();
                 }
                 return;
@@ -33,14 +33,25 @@ namespace Ulvark
             {
                 using (var f = new SetupForm(SetupForm.Kind.Setup))
                 {
-                    f.OnContinue = () =>
+                    bool chosenInstall = false, desktop = false;
+                    f.OnContinue = report =>
                     {
-                        if (!f.InstallChosen) { Installer.MarkPortable(); return null; }
-                        try { Installer.Install(f.Desktop); return null; }
+                        chosenInstall = (bool)f.Invoke((Func<bool>)(() => f.InstallChosen));
+                        desktop = (bool)f.Invoke((Func<bool>)(() => f.Desktop));
+                        if (!chosenInstall) { Installer.MarkPortable(); return null; }
+                        try { Installer.Install(desktop); }
                         catch (Exception ex) { return ex.Message; }
+                        // start the installed copy and stay on screen until it is visible: no blank gap
+                        report("OPENING ULVARK");
+                        using (var ready = new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.ManualReset, AppForm.ReadyEvent))
+                        {
+                            Installer.Launch(args.Concat(new[] { "--from-setup" }).ToArray());
+                            ready.WaitOne(20000);
+                        }
+                        return null;
                     };
                     if (f.ShowDialog() != DialogResult.OK) return;
-                    if (f.InstallChosen) { Installer.Launch(args); return; }
+                    if (chosenInstall) return;
                 }
             }
 

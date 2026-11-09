@@ -22,6 +22,8 @@ namespace Ulvark
     {
         const int Parallel = 2;
         public const string AppName = "Ulvark";
+        public const string ReadyEvent = "Local\\Ulvark.Ready";
+        Splash splash;
         const string RepoUrl = "https://github.com/4leX-42/Ulvark";
 
         readonly WebView2 web = new WebView2();
@@ -100,6 +102,9 @@ namespace Ulvark
         {
             base.OnShown(e);
             Genie.LocateTarget(this);
+            // WebView2 takes a moment (seconds on the very first run): show a small splash meanwhile,
+            // unless the installer window is still covering the hand-over
+            if (!startUrls.Contains("--from-setup")) { splash = new Splash(Bounds); splash.Show(); }
             try
             {
                 Embedded.ExtractLoader();
@@ -111,7 +116,7 @@ namespace Ulvark
             }
             catch (Exception ex)
             {
-                Cloak(false);
+                splash?.Close(); Cloak(false);
                 MessageBox.Show(this, "Ulvark needs the Microsoft Edge WebView2 Runtime (included in Windows 11)\n\n" + ex.Message, AppName);
                 Close();
                 return;
@@ -154,11 +159,13 @@ namespace Ulvark
         {
             animating = true;
             var snap = await Snap();
+            splash?.Close(); splash = null;   // only now: the genie overlay follows immediately
             if (snap != null) { Genie.Play(snap, Bounds, false, () => Cloak(false)); Remember(snap); }
             else Cloak(false);
             animating = false;
             Activate();
             Post(new { t = "reveal" });
+            try { using (var ev = System.Threading.EventWaitHandle.OpenExisting(ReadyEvent)) ev.Set(); } catch { }
         }
 
         async void Minimize()
@@ -206,7 +213,7 @@ namespace Ulvark
                 case "ready":
                     pageReady = true;
                     PushState(); PushJobs();
-                    foreach (var u in startUrls) Add(u, false, Settings.MaxHeight, Settings.VideoFormat);
+                    foreach (var u in startUrls.Where(a => !a.StartsWith("--"))) Add(u, false, Settings.MaxHeight, Settings.VideoFormat);
                     Reveal();
                     PrepareEngine();
                     break;

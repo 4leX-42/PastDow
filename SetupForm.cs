@@ -93,7 +93,10 @@ namespace Ulvark
         readonly Stopwatch clock = Stopwatch.StartNew();
         double lastT;
         string error = "";
-        public Func<string> OnContinue;   // returns an error to show, or null to close with OK
+        /// <summary>Runs on a worker thread; report(text) updates the status line. Returns an error to show, or null.</summary>
+        public Func<Action<string>, string> OnContinue;
+        string busy;                        // status while working ("INSTALLING", "OPENING ULVARK"); null = idle
+        double busyStart;
 
         public SetupForm(Kind kind)
         {
@@ -135,10 +138,25 @@ namespace Ulvark
             frame.Start();
         }
 
-        void Continue()
+        async void Continue()
         {
-            var err = OnContinue?.Invoke();
-            if (err != null) { error = err; Invalidate(); return; }
+            if (busy != null || OnContinue == null) return;
+            error = "";
+            busy = kind == Kind.Setup ? (InstallChosen ? "INSTALLING" : "STARTING") : "UNINSTALLING";
+            busyStart = lastT;
+            foreach (Control c in Controls) if (c != btnClose) c.Enabled = false;
+            string err;
+            try { err = await System.Threading.Tasks.Task.Run(() => OnContinue(s => { try { BeginInvoke((Action)(() => { busy = s; Invalidate(); })); } catch { } })); }
+            catch (Exception ex) { err = ex.Message; }
+            if (err != null)
+            {
+                busy = null; error = err;
+                foreach (Control c in Controls) c.Enabled = true;
+                if (kind == Kind.Setup) desktop.Enabled = install.Selected;
+                Invalidate(); return;
+            }
+            // fade out instead of vanishing
+            for (double o = 1; o > 0; o -= 0.12) { Opacity = o; await System.Threading.Tasks.Task.Delay(16); }
             DialogResult = DialogResult.OK;
             Close();
         }
@@ -151,6 +169,7 @@ namespace Ulvark
             foreach (Control c in Controls)
                 if (c is IAnim a && c.Visible && a.Step(dt)) c.Invalidate();
             if (t < 1.2) Invalidate(new Rectangle(0, Theme.S(60), ClientSize.Width, Theme.S(110)));
+            if (busy != null) Invalidate(new Rectangle(0, go.Top - Theme.S(12), ClientSize.Width, go.Height + Theme.S(24)));
         }
 
         protected override void OnLayout(LayoutEventArgs e)
@@ -220,6 +239,21 @@ namespace Ulvark
                                             : "Removes the app, its shortcuts and its engine · your downloads stay where they are";
             Theme.Tracked(g, head, Theme.Display(15), m, Theme.S(82) + dy, Theme.Mix(Theme.Bg, Theme.Text, a), 0.12f);
             TextRenderer.DrawText(g, sub, Theme.Sans(9.5f), new Point(m, Theme.S(114) + dy), Theme.Mix(Theme.Bg, Theme.Sub, a), TextFormatFlags.NoPadding);
+            if (busy != null)
+            {
+                // status on the left of the button, a short light running along a hairline under it
+                var f = Theme.Display(9.5f);
+                int sy = go.Top + (go.Height - Theme.TextH(f)) / 2 - Theme.S(4);
+                Theme.Tracked(g, busy, f, m, sy, Theme.Text, 0.2f);
+                int lw = go.Left - m - Theme.S(28), ly = sy + Theme.TextH(f) + Theme.S(10);
+                using (var b = new SolidBrush(Theme.Line)) g.FillRectangle(b, m, ly, lw, Math.Max(1, Theme.S(1)));
+                double ph = ((lastT - busyStart) / 1.1) % 1.0;
+                int seg = lw / 3, x = m + (int)((lw + seg) * Theme.EaseOut(ph)) - seg;
+                int x0 = Math.Max(m, x), x1 = Math.Min(m + lw, x + seg);
+                if (x1 > x0)
+                    using (var b = new System.Drawing.Drawing2D.LinearGradientBrush(new Rectangle(x - 1, ly, seg + 2, 2), Color.FromArgb(0, 255, 255, 255), Color.White, 0f))
+                    { b.WrapMode = System.Drawing.Drawing2D.WrapMode.TileFlipXY; g.FillRectangle(b, x0, ly, x1 - x0, Math.Max(1, Theme.S(1))); }
+            }
             if (error.Length > 0)
                 TextRenderer.DrawText(g, error, Theme.Sans(9), new Rectangle(m, go.Top, go.Left - m - Theme.S(20), go.Height), Theme.Red,
                     TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
