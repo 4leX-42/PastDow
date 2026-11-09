@@ -40,7 +40,6 @@ namespace Ulvark
         string updateNote = "Checks once a day";
         CancellationTokenSource setupCts;
 
-        static readonly string[] Browsers = { "none", "firefox", "brave", "chrome", "edge" };
         int M => Theme.S(40);
 
         public MainForm(string[] args)
@@ -82,12 +81,6 @@ namespace Ulvark
 
             side.Items.Add(new SideMenu.Item { Label = "VIDEO FOLDER", Value = () => Settings.VideoDir, Click = () => ChooseFolder(false) });
             side.Items.Add(new SideMenu.Item { Label = "AUDIO FOLDER", Value = () => Settings.AudioDir, Click = () => ChooseFolder(true) });
-            side.Items.Add(new SideMenu.Item
-            {
-                Label = "BROWSER COOKIES",
-                Value = () => Settings.Cookies == "none" ? "Off" : Cap(Settings.Cookies),
-                Click = () => { Settings.Cookies = Browsers[(Array.IndexOf(Browsers, Settings.Cookies) + 1) % Browsers.Length]; Settings.Save(); }
-            });
             side.Items.Add(new SideMenu.Item
             {
                 Label = "SKIP DOWNLOADED",

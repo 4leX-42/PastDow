@@ -176,12 +176,11 @@ namespace Ulvark
 
         static string Friendly(string e)
         {
-            if (e.Contains("Sign in to confirm your age")) return "Age-restricted video: turn on browser cookies in the menu";
-            if (e.Contains("Sign in to confirm") && e.Contains("bot")) return "YouTube wants to verify you: turn on browser cookies in the menu";
+            if (e.Contains("Sign in to confirm your age")) return "Age-restricted video: YouTube asks to sign in for this one";
+            if (e.Contains("Sign in to confirm") && e.Contains("bot")) return "YouTube is asking to verify you are not a bot · try again in a while";
             if (e.Contains("Private video")) return "Private video";
             if (e.Contains("Video unavailable")) return "Video unavailable";
             if (e.Contains("is not a valid URL") || e.Contains("Unsupported URL")) return "Unsupported link";
-            if (e.Contains("could not find") && e.Contains("cookies")) return "Cannot read that browser's cookies: pick another one in the menu";
             return e.Length > 160 ? e.Substring(0, 160) + "…" : e;
         }
 
@@ -224,7 +223,6 @@ namespace Ulvark
                 a.Add("--no-overwrites");
                 if (Settings.SkipDone) { a.Add("--download-archive"); a.Add(Settings.Archive(j.Audio)); }
             }
-            if (Settings.Cookies != "none") { a.Add("--cookies-from-browser"); a.Add(Settings.Cookies); }
             a.Add("--");
             a.Add(j.Url);
             var sb = new StringBuilder();

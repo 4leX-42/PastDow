@@ -18,7 +18,6 @@ namespace Ulvark
         public static string AudioDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyMusic), "Ulvark");
         public static bool Audio;
         public static int MaxHeight;          // 0 = no cap
-        public static string Cookies = "none"; // none, firefox, brave, chrome, edge
         public static bool SkipDone = true;   // skip what was already downloaded (archive files)
 
         public static void Load()
@@ -40,7 +39,6 @@ namespace Ulvark
                 if (d.TryGetValue("audio_dir", out v) && v.Length > 0) AudioDir = v;
                 if (d.TryGetValue("audio", out v)) Audio = v == "1";
                 if (d.TryGetValue("max_height", out v)) int.TryParse(v, out MaxHeight);
-                if (d.TryGetValue("cookies", out v) && v.Length > 0) Cookies = v;
                 if (d.TryGetValue("skip_done", out v)) SkipDone = v != "0";
             }
             catch { }
@@ -54,7 +52,7 @@ namespace Ulvark
                 File.WriteAllLines(File_, new[]
                 {
                     "video_dir=" + VideoDir, "audio_dir=" + AudioDir, "audio=" + (Audio ? "1" : "0"),
-                    "max_height=" + MaxHeight, "cookies=" + Cookies, "skip_done=" + (SkipDone ? "1" : "0")
+                    "max_height=" + MaxHeight, "skip_done=" + (SkipDone ? "1" : "0")
                 }, Encoding.UTF8);
             }
             catch { }

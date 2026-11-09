@@ -12,7 +12,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Product>Ulvark</Product>
     <Description>Ulvark - video and audio downloader powered by yt-dlp</Description>
-    <Version>1.2.0</Version>
+    <Version>1.2.1</Version>
     <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
   </PropertyGroup>
 
