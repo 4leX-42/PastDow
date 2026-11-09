@@ -16,7 +16,7 @@
 
 &nbsp;
 
-YouTube and 1,000+ other sites · portable `.exe` · no installer, no admin
+YouTube and 1,000+ other sites · install or run portable · no admin rights
 
 &nbsp;
 
