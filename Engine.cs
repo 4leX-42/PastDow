@@ -9,10 +9,10 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Ulvark
+namespace PastDow
 {
     /// <summary>
-    /// Engine: yt-dlp + ffmpeg + deno (the JS runtime YouTube now requires) in %LOCALAPPDATA%\Ulvark\bin.
+    /// Engine: yt-dlp + ffmpeg + deno (the JS runtime YouTube now requires) in %LOCALAPPDATA%\PastDow\bin.
     /// Downloaded on first run from their official releases; each published SHA-256 is checked.
     /// Not bundled in the .exe: yt-dlp goes stale within weeks, so it updates itself (yt-dlp -U).
     /// </summary>
@@ -105,7 +105,7 @@ namespace Ulvark
         static HttpWebRequest Req(string url)
         {
             var r = (HttpWebRequest)WebRequest.Create(url);
-            r.UserAgent = "Ulvark";
+            r.UserAgent = "PastDow";
             r.Timeout = 30000;
             r.ReadWriteTimeout = 60000;
             return r;

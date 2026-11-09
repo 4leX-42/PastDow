@@ -5,7 +5,7 @@ using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
-namespace Ulvark
+namespace PastDow
 {
     /// <summary>
     /// Small loading card shown while WebView2 starts (instant on later runs, a few seconds on the first one):
@@ -49,8 +49,8 @@ namespace Ulvark
         {
             var g = Theme.Crisp(e.Graphics);
             var f = Theme.Display(13);
-            int tw = Theme.TrackedW("ULVARK", f, 0.42f);
-            Theme.Tracked(g, "ULVARK", f, (Width - tw) / 2, Theme.S(38), Theme.Text, 0.42f);
+            int tw = Theme.TrackedW("PAST&DOW", f, 0.42f);
+            Theme.Tracked(g, "PAST&DOW", f, (Width - tw) / 2, Theme.S(38), Theme.Text, 0.42f);
             int lw = Theme.S(150), lx = (Width - lw) / 2, ly = Theme.S(76), hair = Math.Max(1, Theme.S(1));
             using (var b = new SolidBrush(Theme.Line)) g.FillRectangle(b, lx, ly, lw, hair);
             double ph = (clock.Elapsed.TotalSeconds / 1.1) % 1.0;

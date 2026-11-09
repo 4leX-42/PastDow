@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Ulvark</title>
+<title>PastDow</title>
 <style>
   :root { --fg:#f3f3f1; --sub:#bdbdb9; --mute:#93938f; --dim:#6c6c68; --ease:cubic-bezier(.2,.8,.2,1); }
   * { box-sizing:border-box; margin:0; padding:0; }
@@ -218,7 +218,7 @@
 
   <div class="bar" id="bar"></div>
   <div class="rail intro"></div>
-  <div class="brand intro">ULVARK</div>
+  <div class="brand intro">PAST&amp;DOW</div>
   <button class="menu intro" id="menuBtn"><i></i>MENU</button>
   <button class="wbtn intro" id="min" title="Minimise"><svg viewBox="0 0 12 12"><path d="M1 6h10" stroke="currentColor" stroke-width="1"/></svg></button>
   <button class="wbtn intro" id="close" title="Close"><svg viewBox="0 0 12 12"><path d="M1.5 1.5l9 9M10.5 1.5l-9 9" stroke="currentColor" stroke-width="1"/></svg></button>
@@ -231,7 +231,7 @@
   </div>
 
   <div class="h1 intro" style="animation-delay:.2s">PASTE THE LINK</div>
-  <div class="h2 intro" style="animation-delay:.3s" id="h2">And let Ulvark do the rest</div>
+  <div class="h2 intro" style="animation-delay:.3s" id="h2">And let PastDow do the rest</div>
 
   <div class="pill intro" style="animation-delay:.35s" id="pill"></div>
   <div class="setup" id="setup"></div>
@@ -274,7 +274,7 @@
       <button class="def" data-k="afmt"><span>AUDIO FORMAT</span><span class="val" id="dA"></span></button>
     </div>
     <button class="it" style="transition-delay:.30s" id="mUpdate"><b>UPDATE YT-DLP</b><em></em></button>
-    <button class="it" style="transition-delay:.36s" id="mSource"><b>SOURCE CODE</b><em>github.com/4leX-42/Ulvark</em></button>
+    <button class="it" style="transition-delay:.36s" id="mSource"><b>SOURCE CODE</b><em>github.com/4leX-42/PastDow</em></button>
     <div class="ver" id="ver"></div>
     <div class="dd" id="dd"></div>
   </div>
@@ -443,8 +443,8 @@ function receive(m) {
     $('mSkip').querySelector('em').textContent = m.skip ? 'On' : 'Off';
     $('mFolders').querySelector('em').textContent = m.channelFolders ? 'One folder per channel' : 'Off · straight into the folder';
     $('mUpdate').querySelector('em').textContent = m.update;
-    $('ver').textContent = 'ULVARK ' + m.version + ' · POWERED BY YT-DLP';
-    $('h2').textContent = m.engine || 'And let Ulvark do the rest';
+    $('ver').textContent = 'PAST&DOW ' + m.version + ' · POWERED BY YT-DLP';
+    $('h2').textContent = m.engine || 'And let PastDow do the rest';
     $('setup').style.width = m.enginePct >= 0 ? (m.enginePct * 588) + 'px' : '0';
   }
   if (m.t === 'jobs') renderJobs(m.jobs);
@@ -500,7 +500,7 @@ function renderJobs(jobs) {
 // ---- demo when opened in a plain browser ----
 const dj = []; let did = 0;
 function demo(o) {
-  if (o.t === 'ready') { receive({ t: 'state', videoFree: '214 GB', audioFree: '214 GB', q: 0, vfmt: 'mkv', afmt: 'mp3', videoDir: 'Videos \\ Ulvark', audioDir: 'Music \\ Ulvark', skip: true, update: 'Up to date', engine: '', enginePct: -1, version: 'preview' }); receive({ t: 'reveal' }); }
+  if (o.t === 'ready') { receive({ t: 'state', videoFree: '214 GB', audioFree: '214 GB', q: 0, vfmt: 'mkv', afmt: 'mp3', videoDir: 'Videos \\ PastDow', audioDir: 'Music \\ PastDow', skip: true, update: 'Up to date', engine: '', enginePct: -1, version: 'preview' }); receive({ t: 'reveal' }); }
   if (o.t === 'add') {
     const j = { id: ++did, url: o.url, title: '', state: 'running', started: false, pct: 0, speed: '', eta: '', kind: o.mode === 'audio' ? o.fmt.toUpperCase() : (o.q ? o.q + 'P' : 'BEST') + ' · ' + o.fmt.toUpperCase(), size: '' };
     dj.push(j);

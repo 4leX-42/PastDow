@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 
-namespace Ulvark
+namespace PastDow
 {
     /// <summary>
     /// Windows 11 folder picker (IFileOpenDialog + FOS_PICKFOLDERS): the normal Explorer dialog with the

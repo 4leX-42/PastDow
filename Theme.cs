@@ -5,7 +5,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.Windows.Forms;
 
-namespace Ulvark
+namespace PastDow
 {
     /// <summary>
     /// Black, off-white and one grey. Display type is Bahnschrift (DIN, ships with Windows 10/11), uppercase and
@@ -21,13 +21,13 @@ namespace Ulvark
         public static readonly Color Faint = Color.FromArgb(120, 120, 118);
         public static readonly Color Red = Color.FromArgb(232, 108, 100);
 
-        /// <summary>Single UI scale: DPI / 96, reduced so the window fits. ULVARK_SCALE forces it.</summary>
+        /// <summary>Single UI scale: DPI / 96, reduced so the window fits. PASTDOW_SCALE forces it.</summary>
         public static readonly float Scale = InitScale();
         public static int S(float px) => (int)Math.Round(px * Scale);
 
         static float InitScale()
         {
-            if (float.TryParse(Environment.GetEnvironmentVariable("ULVARK_SCALE"), System.Globalization.NumberStyles.Float,
+            if (float.TryParse(Environment.GetEnvironmentVariable("PASTDOW_SCALE"), System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture, out var forced) && forced >= 0.5f && forced <= 4f)
                 return forced;
             float dpi = 96f;
@@ -71,7 +71,7 @@ namespace Ulvark
 
         public static Graphics Crisp(Graphics g) { g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit; return g; }
 
-        public static int TextW(string s, Font f) => TextRenderer.MeasureText(s, f, Size.Empty, TextFormatFlags.NoPadding).Width;
+        public static int TextW(string s, Font f) => TextRenderer.MeasureText(s, f, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Width;
         public static int TextH(Font f) => TextRenderer.MeasureText("AG", f, Size.Empty, TextFormatFlags.NoPadding).Height;
 
         // ---- letter-spaced uppercase (GDI has no tracking: draw glyph by glyph with cached widths) ----
@@ -96,7 +96,7 @@ namespace Ulvark
             int t = (int)(f.Size * em);
             foreach (char ch in s)
             {
-                if (ch != ' ') TextRenderer.DrawText(g, ch.ToString(), f, new Point(x, y), c, TextFormatFlags.NoPadding);
+                if (ch != ' ') TextRenderer.DrawText(g, ch.ToString(), f, new Point(x, y), c, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
                 x += CharW(f, ch) + t;
             }
         }

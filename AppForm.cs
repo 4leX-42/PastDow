@@ -12,7 +12,7 @@ using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
-namespace Ulvark
+namespace PastDow
 {
     /// <summary>
     /// The window: fixed 1120x630 (scaled by DPI), borderless, hosting ui\index.html in WebView2. The page draws
@@ -21,10 +21,10 @@ namespace Ulvark
     sealed class AppForm : Form
     {
         const int Parallel = 2;
-        public const string AppName = "Ulvark";
-        public const string ReadyEvent = "Local\\Ulvark.Ready";
+        public const string AppName = "PastDow";
+        public const string ReadyEvent = "Local\\PastDow.Ready";
         Splash splash;
-        const string RepoUrl = "https://github.com/4leX-42/Ulvark";
+        const string RepoUrl = "https://github.com/4leX-42/PastDow";
 
         readonly WebView2 web = new WebView2();
         readonly JavaScriptSerializer json = new JavaScriptSerializer();
@@ -109,21 +109,21 @@ namespace Ulvark
             {
                 Embedded.ExtractLoader();
                 CoreWebView2Environment.SetLoaderDllFolderPath(Embedded.NativeDir);
-                // ULVARK_DEVTOOLS=1 opens DevTools and the remote debugging port 9333 (UI tests)
-                var opts = Environment.GetEnvironmentVariable("ULVARK_DEVTOOLS") == "1" ? new CoreWebView2EnvironmentOptions("--remote-debugging-port=9333") : null;
+                // PASTDOW_DEVTOOLS=1 opens DevTools and the remote debugging port 9333 (UI tests)
+                var opts = Environment.GetEnvironmentVariable("PASTDOW_DEVTOOLS") == "1" ? new CoreWebView2EnvironmentOptions("--remote-debugging-port=9333") : null;
                 var env = await CoreWebView2Environment.CreateAsync(null, Path.Combine(Settings.Home, "webview"), opts);
                 await web.EnsureCoreWebView2Async(env);
             }
             catch (Exception ex)
             {
                 splash?.Close(); Cloak(false);
-                MessageBox.Show(this, "Ulvark needs the Microsoft Edge WebView2 Runtime (included in Windows 11)\n\n" + ex.Message, AppName);
+                MessageBox.Show(this, "PastDow needs the Microsoft Edge WebView2 Runtime (included in Windows 11)\n\n" + ex.Message, AppName);
                 Close();
                 return;
             }
             var s = web.CoreWebView2.Settings;
             s.AreDefaultContextMenusEnabled = false;
-            s.AreDevToolsEnabled = Environment.GetEnvironmentVariable("ULVARK_DEVTOOLS") == "1";
+            s.AreDevToolsEnabled = Environment.GetEnvironmentVariable("PASTDOW_DEVTOOLS") == "1";
             s.IsZoomControlEnabled = false;
             s.IsStatusBarEnabled = false;
             s.AreBrowserAcceleratorKeysEnabled = false;

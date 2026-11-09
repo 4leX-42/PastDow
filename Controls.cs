@@ -4,7 +4,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
 
-namespace Ulvark
+namespace PastDow
 {
     /// <summary>Something that animates. Step() advances it by dt seconds and says whether it needs repainting.</summary>
     interface IAnim { bool Step(double dt); }

@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 using System.Windows.Automation;
 using System.Windows.Forms;
 
-namespace Ulvark
+namespace PastDow
 {
     /// <summary>
     /// macOS-style genie: the window narrows into its taskbar button when minimised and pours back out when
@@ -17,8 +17,8 @@ namespace Ulvark
     /// </summary>
     static class Genie
     {
-        // ULVARK_GENIE_SLOW=1 plays it 6x slower (to check the frames)
-        static readonly double Duration = Environment.GetEnvironmentVariable("ULVARK_GENIE_SLOW") == "1" ? 2.2 : 0.36;
+        // PASTDOW_GENIE_SLOW=1 plays it 6x slower (to check the frames)
+        static readonly double Duration = Environment.GetEnvironmentVariable("PASTDOW_GENIE_SLOW") == "1" ? 2.2 : 0.36;
         static Point? target;
 
         /// <summary>Taskbar button of this app (UI Automation), else the middle of the taskbar.</summary>

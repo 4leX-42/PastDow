@@ -2,13 +2,13 @@ using System;
 using System.Linq;
 using System.Windows.Forms;
 
-namespace Ulvark
+namespace PastDow
 {
     static class Program
     {
         /// <summary>
-        /// Ulvark.exe [URL ...]: links passed on the command line are queued at start.
-        /// Ulvark.exe --uninstall: what Settings > Apps runs.
+        /// PastDow.exe [URL ...]: links passed on the command line are queued at start.
+        /// PastDow.exe --uninstall: what Settings > Apps runs.
         /// First run from a downloaded file asks: install (default) or portable.
         /// </summary>
         [STAThread]
@@ -31,7 +31,7 @@ namespace Ulvark
 
             // a copy installed by winget is already managed by winget: no install/portable question
             bool fromWinget = Installer.Self.IndexOf(@"\WinGet\", StringComparison.OrdinalIgnoreCase) >= 0;
-            if (!Installer.RunningInstalled && !Installer.PortableChosen && !fromWinget && Environment.GetEnvironmentVariable("ULVARK_NO_SETUP") != "1")
+            if (!Installer.RunningInstalled && !Installer.PortableChosen && !fromWinget && Environment.GetEnvironmentVariable("PASTDOW_NO_SETUP") != "1")
             {
                 using (var f = new SetupForm(SetupForm.Kind.Setup))
                 {
@@ -44,7 +44,7 @@ namespace Ulvark
                         try { Installer.Install(desktop); }
                         catch (Exception ex) { return ex.Message; }
                         // start the installed copy and stay on screen until it is visible: no blank gap
-                        report("OPENING ULVARK");
+                        report("OPENING PASTDOW");
                         using (var ready = new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.ManualReset, AppForm.ReadyEvent))
                         {
                             Installer.Launch(args.Concat(new[] { "--from-setup" }).ToArray());

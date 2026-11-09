@@ -1,6 +1,6 @@
 name: release
 
-# A tag like v2.0.2 builds Ulvark.exe on GitHub's own Windows machine and publishes it as the release asset.
+# A tag like v2.0.2 builds PastDow.exe on GitHub's own Windows machine and publishes it as the release asset.
 # Building here (not on a personal PC) is what code-signing services for open source, such as SignPath, require.
 on:
   push:
@@ -20,11 +20,11 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Build
-        run: dotnet build Ulvark.csproj -c Release -nologo
+        run: dotnet build PastDow.csproj -c Release -nologo
 
       - name: SHA-256
         shell: pwsh
-        run: (Get-FileHash bin/Release/net48/Ulvark.exe -Algorithm SHA256).Hash
+        run: (Get-FileHash bin/Release/net48/PastDow.exe -Algorithm SHA256).Hash
 
       - name: Publish release
         env:
@@ -32,5 +32,5 @@ jobs:
         shell: pwsh
         run: |
           $notes = git tag -l --format='%(contents)' $env:GITHUB_REF_NAME
-          if (-not $notes) { $notes = "Ulvark $env:GITHUB_REF_NAME" }
-          gh release create $env:GITHUB_REF_NAME bin/Release/net48/Ulvark.exe --title "Ulvark $($env:GITHUB_REF_NAME.TrimStart('v'))" --notes "$notes"
+          if (-not $notes) { $notes = "PastDow $env:GITHUB_REF_NAME" }
+          gh release create $env:GITHUB_REF_NAME bin/Release/net48/PastDow.exe --title "PastDow $($env:GITHUB_REF_NAME.TrimStart('v'))" --notes "$notes"

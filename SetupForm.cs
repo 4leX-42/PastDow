@@ -5,7 +5,7 @@ using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
-namespace Ulvark
+namespace PastDow
 {
     /// <summary>Selectable row: a ring that fills when chosen, uppercase title, one line underneath.</summary>
     sealed class OptionRow : Canvas
@@ -95,13 +95,13 @@ namespace Ulvark
         string error = "";
         /// <summary>Runs on a worker thread; report(text) updates the status line. Returns an error to show, or null.</summary>
         public Func<Action<string>, string> OnContinue;
-        string busy;                        // status while working ("INSTALLING", "OPENING ULVARK"); null = idle
+        string busy;                        // status while working ("INSTALLING", "OPENING PASTDOW"); null = idle
         double busyStart;
 
         public SetupForm(Kind kind)
         {
             this.kind = kind;
-            Text = "Ulvark";
+            Text = "PastDow";
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
             BackColor = Theme.Bg;
@@ -230,11 +230,11 @@ namespace Ulvark
         {
             var g = Theme.Crisp(e.Graphics);
             int m = Theme.S(40);
-            Theme.Tracked(g, "ULVARK", Theme.Bold(13), m, Theme.S(26), Theme.Text, 0.42f);
+            Theme.Tracked(g, "PAST&DOW", Theme.Bold(13), m, Theme.S(26), Theme.Text, 0.42f);
             // headline rises in
             double a = Theme.EaseOut(lastT / 0.7);
             int dy = (int)(Theme.S(10) * (1 - a));
-            string head = kind == Kind.Setup ? "HOW DO YOU WANT TO RUN IT" : "UNINSTALL ULVARK";
+            string head = kind == Kind.Setup ? "HOW DO YOU WANT TO RUN IT" : "UNINSTALL PASTDOW";
             string sub = kind == Kind.Setup ? "You can change your mind later: run the file again"
                                             : "Removes the app, its shortcuts and its engine · your downloads stay where they are";
             Theme.Tracked(g, head, Theme.Display(15), m, Theme.S(82) + dy, Theme.Mix(Theme.Bg, Theme.Text, a), 0.12f);

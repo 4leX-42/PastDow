@@ -1,10 +1,10 @@
-<h1 align="center">U L V A R K</h1>
+<h1 align="center">P A S T &amp; D O W</h1>
 
 <p align="center">Any video. Best quality. One click</p>
 
-<p align="center"><a href="https://github.com/4leX-42/Ulvark/releases/latest/download/Ulvark.exe"><b>DOWNLOAD FOR WINDOWS →</b></a><br><sub>or <code>winget install 4leX-42.Ulvark</code></sub></p>
+<p align="center"><a href="https://github.com/4leX-42/PastDow/releases/latest/download/PastDow.exe"><b>DOWNLOAD FOR WINDOWS →</b></a><br><sub>or <code>winget install 4leX-42.PastDow</code></sub></p>
 
-<p align="center"><img src="assets/screenshot.png" width="760" alt="Ulvark"></p>
+<p align="center"><img src="assets/screenshot.png" width="760" alt="PastDow"></p>
 
 &nbsp;
 

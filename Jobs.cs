@@ -6,7 +6,7 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace Ulvark
+namespace PastDow
 {
     enum JobState { Queued, Running, Processing, Done, Skipped, Failed, Canceled }
 
@@ -226,7 +226,7 @@ namespace Ulvark
             if (e.Contains("is not available in your country") || e.Contains("geo")) return "Not available in your country";
             if (e.Contains("members-only") || e.Contains("Join this channel")) return "Members-only video";
             if (e.Contains("logged-in") || e.Contains("login required") || e.Contains("log in") || e.Contains("empty media response") || e.Contains("--cookies"))
-                return "This one needs a login · Ulvark downloads public content only";
+                return "This one needs a login · PastDow downloads public content only";
             if (e.Contains("Video unavailable")) return "Video unavailable";
             if (e.Contains("is not a valid URL") || e.Contains("Unsupported URL")) return "Unsupported link";
             return e.Length > 160 ? e.Substring(0, 160) + "…" : e;

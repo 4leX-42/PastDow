@@ -2,11 +2,11 @@ using System;
 using System.IO;
 using System.Reflection;
 
-namespace Ulvark
+namespace PastDow
 {
     /// <summary>
-    /// Keeps Ulvark a single exe: the WebView2 managed assemblies load from embedded resources, and the native
-    /// WebView2Loader.dll is written once to %LOCALAPPDATA%\Ulvark\wv2.
+    /// Keeps PastDow a single exe: the WebView2 managed assemblies load from embedded resources, and the native
+    /// WebView2Loader.dll is written once to %LOCALAPPDATA%\PastDow\wv2.
     /// </summary>
     static class Embedded
     {
