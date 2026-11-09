@@ -1,11 +1,11 @@
 using System;
 using System.Windows.Forms;
 
-namespace VidGrab
+namespace Ulvark
 {
     static class Program
     {
-        /// <summary>VidGrab.exe [URL ...]: las URL pasadas se ponen en cola al arrancar.</summary>
+        /// <summary>Ulvark.exe [URL ...]: links passed on the command line are queued at start.</summary>
         [STAThread]
         static void Main(string[] args)
         {

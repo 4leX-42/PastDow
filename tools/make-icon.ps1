@@ -1,8 +1,8 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Genera app.ico (16..256): placa casi negra y flecha de descarga en blanco roto.
-  Entradas < 256 en DIB (BMP) y 256 en PNG: System.Drawing no dibuja PNG pequenos.
+  Builds app.ico (16..256): near-black plate with an off-white download arrow.
+  Entries below 256 as DIB (BMP), 256 as PNG: System.Drawing does not draw small PNG entries.
 #>
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
@@ -33,7 +33,7 @@ function New-Frame([int]$s) {
 
     $gold = [System.Drawing.Color]::FromArgb(238, 238, 236)
     $goldDeep = [System.Drawing.Color]::FromArgb(196, 196, 192)
-    # trazos mas gruesos en tamanos pequenos para que se lean
+    # thicker strokes at small sizes so they stay legible
     $bw = [Math]::Max(1.0, 8 * $k)
     if ($s -le 32) { $bw = [Math]::Max(1.0, 1.2 * $s / 16) }
     $pen = New-Object System.Drawing.Pen $gold, $bw

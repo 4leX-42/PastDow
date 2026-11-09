@@ -9,12 +9,12 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace VidGrab
+namespace Ulvark
 {
     /// <summary>
-    /// Motor: yt-dlp + ffmpeg + deno (runtime JS que YouTube exige) en %LOCALAPPDATA%\VidGrab\bin.
-    /// Se descargan la primera vez de sus releases oficiales y se comprueba el SHA-256 publicado.
-    /// No van dentro del .exe: yt-dlp caduca en semanas y se actualiza solo (yt-dlp -U).
+    /// Engine: yt-dlp + ffmpeg + deno (the JS runtime YouTube now requires) in %LOCALAPPDATA%\Ulvark\bin.
+    /// Downloaded on first run from their official releases; each published SHA-256 is checked.
+    /// Not bundled in the .exe: yt-dlp goes stale within weeks, so it updates itself (yt-dlp -U).
     /// </summary>
     static class Engine
     {
@@ -31,7 +31,7 @@ namespace VidGrab
         const string DenoUrl = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip";
         const string DenoSums = DenoUrl + ".sha256sum";
 
-        /// <summary>Descarga lo que falte. progress: (texto, 0..1).</summary>
+        /// <summary>Downloads whatever is missing. progress: (text, 0..1).</summary>
         public static async Task Install(Action<string, double> progress, CancellationToken ct)
         {
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
@@ -43,27 +43,27 @@ namespace VidGrab
                 if (!File.Exists(YtDlp))
                 {
                     string f = Path.Combine(tmp, "yt-dlp.exe");
-                    await Fetch(YtUrl, f, p => progress("Descargando yt-dlp", p * 0.15), ct);
+                    await Fetch(YtUrl, f, p => progress("Downloading yt-dlp", p * 0.15), ct);
                     Verify(f, await FetchText(YtSums, ct), "yt-dlp.exe");
                     Replace(f, YtDlp);
                 }
                 if (!File.Exists(Ffmpeg) || !File.Exists(Path.Combine(Settings.BinDir, "ffprobe.exe")))
                 {
                     string z = Path.Combine(tmp, "ffmpeg.zip");
-                    await Fetch(FfUrl, z, p => progress("Descargando ffmpeg", 0.15 + p * 0.6), ct);
-                    progress("Comprobando ffmpeg", 0.75);
+                    await Fetch(FfUrl, z, p => progress("Downloading ffmpeg", 0.15 + p * 0.6), ct);
+                    progress("Verifying ffmpeg", 0.75);
                     Verify(z, await FetchText(FfSums, ct), "ffmpeg-master-latest-win64-gpl.zip");
                     Extract(z, "ffmpeg.exe", "ffprobe.exe");
                 }
                 if (!File.Exists(Deno))
                 {
                     string z = Path.Combine(tmp, "deno.zip");
-                    await Fetch(DenoUrl, z, p => progress("Descargando deno", 0.76 + p * 0.22), ct);
+                    await Fetch(DenoUrl, z, p => progress("Downloading deno", 0.76 + p * 0.22), ct);
                     Verify(z, await FetchText(DenoSums, ct), "deno-x86_64-pc-windows-msvc.zip");
                     Extract(z, "deno.exe");
                 }
                 File.WriteAllText(Stamp, DateTime.UtcNow.ToString("o"));
-                progress("Listo", 1);
+                progress("Ready", 1);
             }
             finally
             {
@@ -73,21 +73,21 @@ namespace VidGrab
 
         static string Stamp => Path.Combine(Settings.Home, "update.stamp");
 
-        /// <summary>yt-dlp -U como mucho una vez al dia, en segundo plano. Devuelve la linea de estado o null.</summary>
-        public static Task<string> AutoUpdate()
+        /// <summary>yt-dlp -U at most once a day, in the background. Returns a status line or null.</summary>
+        public static Task<string> AutoUpdate(bool force = false)
         {
             return Task.Run(() =>
             {
                 try
                 {
-                    if (File.Exists(Stamp) && DateTime.UtcNow - File.GetLastWriteTimeUtc(Stamp) < TimeSpan.FromHours(20)) return null;
+                    if (!force && File.Exists(Stamp) && DateTime.UtcNow - File.GetLastWriteTimeUtc(Stamp) < TimeSpan.FromHours(20)) return null;
                     var psi = Hidden(YtDlp, "-U");
                     using (var p = Process.Start(psi))
                     {
                         string o = p.StandardOutput.ReadToEnd();
                         p.WaitForExit(90000);
                         File.WriteAllText(Stamp, DateTime.UtcNow.ToString("o"));
-                        return o.Contains("Updated yt-dlp to") ? "yt-dlp actualizado" : null;
+                        return o.Contains("Updated yt-dlp to") ? "yt-dlp updated" : force ? "yt-dlp is up to date" : null;
                     }
                 }
                 catch { return null; }
@@ -105,7 +105,7 @@ namespace VidGrab
         static HttpWebRequest Req(string url)
         {
             var r = (HttpWebRequest)WebRequest.Create(url);
-            r.UserAgent = "VidGrab";
+            r.UserAgent = "Ulvark";
             r.Timeout = 30000;
             r.ReadWriteTimeout = 60000;
             return r;
@@ -143,7 +143,7 @@ namespace VidGrab
             }
         }
 
-        /// <summary>Busca el hash en la linea que nombra el fichero (o el unico hash si no lo nombra) y lo compara.</summary>
+        /// <summary>Finds the hash on the line naming the file (or the only hash if none does) and compares it.</summary>
         static void Verify(string file, string sums, string name)
         {
             string expected = null;
@@ -154,12 +154,12 @@ namespace VidGrab
                 if (line.Contains(name)) { expected = m.Value; break; }
                 if (expected == null) expected = m.Value;
             }
-            if (expected == null) throw new Exception("No hay suma SHA-256 publicada para " + name);
+            if (expected == null) throw new Exception("No published SHA-256 for " + name);
             string actual;
             using (var s = File.OpenRead(file)) using (var h = SHA256.Create())
                 actual = BitConverter.ToString(h.ComputeHash(s)).Replace("-", "");
             if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase))
-                throw new Exception("SHA-256 no coincide en " + name + ": descarga corrupta o manipulada");
+                throw new Exception("SHA-256 mismatch for " + name + ": corrupted or tampered download");
         }
 
         static void Extract(string zip, params string[] names)
@@ -170,7 +170,7 @@ namespace VidGrab
                     ZipArchiveEntry hit = null;
                     foreach (var e in a.Entries)
                         if (e.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) { hit = e; break; }
-                    if (hit == null) throw new Exception(name + " no esta en " + Path.GetFileName(zip));
+                    if (hit == null) throw new Exception(name + " not found in " + Path.GetFileName(zip));
                     string tmp = Path.Combine(Settings.BinDir, name + ".new");
                     hit.ExtractToFile(tmp, true);
                     Replace(tmp, Path.Combine(Settings.BinDir, name));

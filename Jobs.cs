@@ -6,11 +6,11 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace VidGrab
+namespace Ulvark
 {
     enum JobState { Queued, Running, Processing, Done, Skipped, Failed, Canceled }
 
-    /// <summary>Una descarga. Los campos los escribe el hilo de lectura del proceso; la UI los pinta con un timer.</summary>
+    /// <summary>One download. The process reader thread writes the fields; the UI paints them on a timer.</summary>
     sealed class Job
     {
         public string Url;
@@ -19,50 +19,58 @@ namespace VidGrab
         public bool Force;
         public volatile JobState State = JobState.Queued;
         public string Title;
-        public double Percent;      // 0..100 de la fase actual
-        public int Phase;           // 1 = video, 2 = audio (formatos separados)
+        public double Percent;      // 0..100 of the current phase
+        public int Phase;           // 1 = video, 2 = audio (separate formats)
+        public bool Started;        // first progress line seen; before that the UI shows a spinner
         public string Speed = "", Eta = "";
         public string File;
         public string Error;
         public Process Proc;
         public bool CancelRequested;
 
+        // UI-only animation state
+        public readonly long Added = Environment.TickCount;
+        public double Shown;        // smoothed percent
+
         public bool Active => State == JobState.Running || State == JobState.Processing;
         public bool Finished => State >= JobState.Done;
 
         public string Folder => Audio ? Settings.AudioDir : Settings.VideoDir;
 
+        static readonly CultureInfo En = CultureInfo.InvariantCulture;
+
         public string Detail
         {
             get
             {
-                string kind = Audio ? "mp3" : MaxHeight > 0 ? MaxHeight + "p" : "máxima calidad";
+                string kind = Audio ? "MP3" : MaxHeight > 0 ? MaxHeight + "p" : "Best quality";
                 switch (State)
                 {
-                    case JobState.Queued: return kind + " · en cola";
+                    case JobState.Queued: return kind + "  ·  waiting";
                     case JobState.Running:
+                        if (!Started) return kind + "  ·  fetching video info";
                         var sb = new StringBuilder(kind);
-                        if (Phase > 1) sb.Append(" · parte ").Append(Phase);
-                        if (Speed.Length > 0) sb.Append(" · ").Append(Speed);
-                        if (Eta.Length > 0) sb.Append(" · quedan ").Append(Eta);
+                        if (Phase > 1) sb.Append("  ·  part ").Append(Phase);
+                        if (Speed.Length > 0) sb.Append("  ·  ").Append(Speed);
+                        if (Eta.Length > 0) sb.Append("  ·  ").Append(Eta).Append(" left");
                         return sb.ToString();
-                    case JobState.Processing: return kind + " · uniendo vídeo y audio";
+                    case JobState.Processing: return kind + "  ·  merging video and audio";
                     case JobState.Done:
                         try
                         {
                             var fi = new FileInfo(File);
-                            return kind + " · " + (fi.Length / 1048576.0).ToString("0.0", CultureInfo.GetCultureInfo("es-ES")) + " MB · " + fi.Extension.TrimStart('.') + " · doble clic para abrir";
+                            return kind + "  ·  " + (fi.Length / 1048576.0).ToString("0.0", En) + " MB  ·  " + fi.Extension.TrimStart('.').ToUpperInvariant() + "  ·  double-click to open";
                         }
                         catch { return kind; }
-                    case JobState.Skipped: return kind + " · ya lo tenías (clic derecho para bajarlo otra vez)";
-                    case JobState.Canceled: return kind + " · cancelado";
+                    case JobState.Skipped: return kind + "  ·  already downloaded (right-click to download again)";
+                    case JobState.Canceled: return kind + "  ·  canceled";
                     default: return Error ?? "error";
                 }
             }
         }
     }
 
-    /// <summary>Lanza yt-dlp con la configuracion del lab (maxima calidad, metadatos, subtitulos) y lee su progreso.</summary>
+    /// <summary>Runs yt-dlp (best quality, metadata, subtitles) and reads its progress.</summary>
     static class Runner
     {
         public static event Action<Job> Finished;
@@ -72,7 +80,7 @@ namespace VidGrab
         public static void Start(Job j)
         {
             j.State = JobState.Running;
-            j.Percent = 0; j.Phase = 0; j.Speed = j.Eta = ""; j.Error = null; j.File = null;
+            j.Percent = 0; j.Phase = 0; j.Started = false; j.Speed = j.Eta = ""; j.Error = null; j.File = null;
             try
             {
                 Directory.CreateDirectory(j.Folder);
@@ -91,7 +99,7 @@ namespace VidGrab
             catch (Exception ex)
             {
                 j.State = JobState.Failed;
-                j.Error = "No se pudo lanzar yt-dlp: " + ex.Message;
+                j.Error = "Could not start yt-dlp: " + ex.Message;
                 Finished?.Invoke(j);
             }
         }
@@ -104,7 +112,7 @@ namespace VidGrab
             if (p == null) return;
             try
             {
-                // arbol completo: yt-dlp lanza ffmpeg y deno
+                // whole tree: yt-dlp starts ffmpeg and deno
                 using (var k = Process.Start(new ProcessStartInfo("taskkill", "/T /F /PID " + p.Id) { CreateNoWindow = true, UseShellExecute = false }))
                     k.WaitForExit(5000);
             }
@@ -121,7 +129,7 @@ namespace VidGrab
             else
             {
                 j.State = JobState.Failed;
-                if (j.Error == null) j.Error = "yt-dlp terminó con código " + code;
+                if (j.Error == null) j.Error = "yt-dlp exited with code " + code;
             }
             j.Speed = j.Eta = "";
             try { p.Dispose(); } catch { }
@@ -142,13 +150,14 @@ namespace VidGrab
                         j.Percent = Math.Max(0, Math.Min(100, pct));
                     j.Speed = Clean(f[2]);
                     j.Eta = Clean(f[3]);
+                    j.Started = true;
                     if (j.State == JobState.Processing) j.State = JobState.Running;
                 }
                 return;
             }
             if (s.StartsWith("VGT|")) { j.Title = s.Substring(4); return; }
             if (s.StartsWith("VGF|")) { j.File = s.Substring(4); return; }
-            if (s.StartsWith("[download] Destination:")) { j.Phase++; j.Percent = 0; return; }
+            if (s.StartsWith("[download] Destination:")) { j.Phase++; j.Percent = 0; j.Shown = 0; j.Started = true; return; }
             if (s.Contains("has already been recorded in the archive")) { j.State = JobState.Skipped; return; }
             if (s.StartsWith("[Merger]") || s.StartsWith("[ExtractAudio]") || s.StartsWith("[EmbedThumbnail]") || s.StartsWith("[Metadata]"))
             {
@@ -165,16 +174,16 @@ namespace VidGrab
 
         static string Friendly(string e)
         {
-            if (e.Contains("Sign in to confirm your age")) return "Vídeo con restricción de edad: activa cookies del navegador (abajo)";
-            if (e.Contains("Sign in to confirm") && e.Contains("bot")) return "YouTube pide verificar: activa cookies del navegador (abajo)";
-            if (e.Contains("Private video")) return "Vídeo privado";
-            if (e.Contains("Video unavailable")) return "Vídeo no disponible";
-            if (e.Contains("is not a valid URL") || e.Contains("Unsupported URL")) return "Enlace no soportado";
-            if (e.Contains("could not find") && e.Contains("cookies")) return "No encuentro las cookies de ese navegador: cambia o quita la opción de abajo";
+            if (e.Contains("Sign in to confirm your age")) return "Age-restricted video: turn on browser cookies in the menu";
+            if (e.Contains("Sign in to confirm") && e.Contains("bot")) return "YouTube wants to verify you: turn on browser cookies in the menu";
+            if (e.Contains("Private video")) return "Private video";
+            if (e.Contains("Video unavailable")) return "Video unavailable";
+            if (e.Contains("is not a valid URL") || e.Contains("Unsupported URL")) return "Unsupported link";
+            if (e.Contains("could not find") && e.Contains("cookies")) return "Cannot read that browser's cookies: pick another one in the menu";
             return e.Length > 160 ? e.Substring(0, 160) + "…" : e;
         }
 
-        /// <summary>Argumentos equivalentes a yt-dlp.conf + tools\yt.ps1 del lab descargar-videos.</summary>
+        /// <summary>yt-dlp arguments: best video+audio by resolution, fps and HDR, MKV with metadata, chapters, thumbnail, subtitles.</summary>
         static string Args(Job j)
         {
             var a = new List<string>
@@ -186,26 +195,26 @@ namespace VidGrab
                 "--progress-template", "download:VGP|%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s",
                 "--print", "video:VGT|%(title)s",
                 "--print", "after_move:VGF|%(filepath)s",
-                "--no-quiet", // --print activa --quiet y esconderia "ya en el archivo" y los destinos
+                "--no-quiet", // --print turns on --quiet, which hides "already in archive" and the destinations
                 "-P", j.Folder,
                 "-P", "temp:" + Path.Combine(Settings.Home, "tmp"),
                 "--windows-filenames", "--trim-filenames", "200",
                 "--embed-metadata", "--embed-thumbnail", "--sponsorblock-mark", "all",
                 "--concurrent-fragments", "8", "--retries", "10", "--fragment-retries", "10", "--extractor-retries", "5",
                 "--continue", "--no-mtime",
-                "--ignore-errors" // un subtitulo que falla (p. ej. HTTP 429) no tumba el video
+                "--ignore-errors" // a failing subtitle (e.g. HTTP 429) must not fail the whole video
             };
             if (j.Audio)
             {
                 a.AddRange(new[] { "-f", "ba/b", "-x", "--audio-format", "mp3", "--audio-quality", "0",
-                    "-o", "%(uploader,channel,uploader_id|Varios)s/%(title).150B.%(ext)s" });
+                    "-o", "%(uploader,channel,uploader_id|Various)s/%(title).150B.%(ext)s" });
             }
             else
             {
                 a.AddRange(new[] { "-f", j.MaxHeight > 0 ? $"bv*[height<={j.MaxHeight}]+ba/b[height<={j.MaxHeight}]" : "bv*+ba/b",
                     "-S", "res,fps,hdr,vcodec,br", "--merge-output-format", "mkv", "--remux-video", "mkv",
                     "--embed-chapters", "--embed-subs", "--sub-langs", "es,en,es-orig,en-orig", "--write-subs", "--write-auto-subs", "--convert-subs", "srt",
-                    "-o", "%(uploader,channel,uploader_id,playlist_uploader|Varios)s/%(title).150B [%(id)s].%(ext)s" });
+                    "-o", "%(uploader,channel,uploader_id,playlist_uploader|Various)s/%(title).150B [%(id)s].%(ext)s" });
             }
             if (j.Force) a.Add("--force-overwrites");
             else
@@ -221,7 +230,7 @@ namespace VidGrab
             return sb.ToString();
         }
 
-        /// <summary>Comillas segun las reglas de CommandLineToArgvW (barras antes de comillas y al final).</summary>
+        /// <summary>Quoting per CommandLineToArgvW rules (backslashes before quotes and at the end).</summary>
         public static string Quote(string s)
         {
             if (s.Length > 0 && s.IndexOfAny(new[] { ' ', '\t', '"' }) < 0) return s;

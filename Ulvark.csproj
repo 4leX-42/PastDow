@@ -6,13 +6,13 @@
     <UseWindowsForms>true</UseWindowsForms>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
-    <AssemblyName>VidGrab</AssemblyName>
-    <RootNamespace>VidGrab</RootNamespace>
+    <AssemblyName>Ulvark</AssemblyName>
+    <RootNamespace>Ulvark</RootNamespace>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Product>VidGrab</Product>
-    <Description>VidGrab · descarga de vídeo y audio en máxima calidad con yt-dlp</Description>
-    <Version>1.0.0</Version>
+    <Product>Ulvark</Product>
+    <Description>Ulvark - video and audio downloader powered by yt-dlp</Description>
+    <Version>1.1.0</Version>
     <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
   </PropertyGroup>
 

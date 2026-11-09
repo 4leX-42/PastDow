@@ -3,28 +3,31 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 
-namespace VidGrab
+namespace Ulvark
 {
-    /// <summary>Ajustes en %LOCALAPPDATA%\VidGrab\settings.ini (clave=valor).</summary>
+    /// <summary>Settings in %LOCALAPPDATA%\Ulvark\settings.ini (key=value).</summary>
     static class Settings
     {
-        public static readonly string Home = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VidGrab");
+        public static readonly string Home = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Ulvark");
         public static readonly string BinDir = Path.Combine(Home, "bin");
-        // un historial por modo: bajar el audio de algo ya bajado en video no cuenta como repetido
+        // one history per mode: getting the audio of something already downloaded as video is not a repeat
         public static string Archive(bool audio) => Path.Combine(Home, audio ? "archive-audio.txt" : "archive-video.txt");
         static readonly string File_ = Path.Combine(Home, "settings.ini");
 
-        public static string VideoDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "VidGrab");
-        public static string AudioDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyMusic), "VidGrab");
+        public static string VideoDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "Ulvark");
+        public static string AudioDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyMusic), "Ulvark");
         public static bool Audio;
-        public static int MaxHeight;          // 0 = sin tope
+        public static int MaxHeight;          // 0 = no cap
         public static string Cookies = "none"; // none, firefox, brave, chrome, edge
-        public static bool SkipDone = true;   // no repetir lo ya descargado (archive.txt)
+        public static bool SkipDone = true;   // skip what was already downloaded (archive files)
 
         public static void Load()
         {
             try
             {
+                // pre-release builds were called VidGrab: move that folder over (engine included)
+                string old = Path.Combine(Path.GetDirectoryName(Home), "VidGrab");
+                if (!Directory.Exists(Home) && Directory.Exists(old)) { Directory.Move(old, Home); File.Delete(File_); }
                 Directory.CreateDirectory(Home);
                 if (!File.Exists(File_)) return;
                 var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);

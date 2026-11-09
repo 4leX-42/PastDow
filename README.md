@@ -1,52 +1,63 @@
-# VidGrab
+# Ulvark
 
-Descarga vídeo y audio en máxima calidad desde YouTube y cualquier web que soporte
-[yt-dlp](https://github.com/yt-dlp/yt-dlp). Un solo `.exe` para Windows 10/11, sin instalar nada ni ser
-administrador.
+A small Windows app to download video and audio at the best available quality from YouTube and the 1,000+
+sites supported by [yt-dlp](https://github.com/yt-dlp/yt-dlp). One portable `.exe` for Windows 10/11: no
+installer, no admin rights.
 
-## Uso
+## Download
 
-1. Abre `VidGrab.exe`. Si tienes un enlace copiado, aparece ya en el campo.
-2. Elige **vídeo** (y la calidad máxima) o **audio** (MP3).
-3. Pulsa Enter o **descargar**. Puedes pegar varios enlaces a la vez o arrastrarlos a la ventana.
+Get `Ulvark.exe` from the [latest release](https://github.com/4leX-42/Ulvark/releases/latest) and run it.
 
-Doble clic en una descarga terminada para abrirla; clic derecho para mostrarla en la carpeta, cancelar,
-volver a bajarla o copiar el enlace. También se puede lanzar con enlaces: `VidGrab.exe URL [URL ...]`.
-
-Por defecto el vídeo va a `Vídeos\VidGrab` y el audio a `Música\VidGrab`, en carpetas por canal. Clic
-en la ruta del pie para cambiarla.
-
-## Cómo funciona
-
-La primera vez descarga el motor en `%LOCALAPPDATA%\VidGrab\bin` (unos 200 MB) desde las releases
-oficiales y comprueba el SHA-256 publicado de cada fichero:
-
-| Pieza | Para qué | Origen |
-|---|---|---|
-| `yt-dlp.exe` | la descarga | `github.com/yt-dlp/yt-dlp` |
-| `ffmpeg.exe`, `ffprobe.exe` | unir vídeo y audio, MP3, miniaturas | `github.com/yt-dlp/FFmpeg-Builds` |
-| `deno.exe` | el JavaScript que YouTube exige para las calidades altas | `github.com/denoland/deno` |
-
-No van dentro del `.exe` porque yt-dlp deja de funcionar en semanas cuando YouTube cambia algo. La app lo
-actualiza sola (`yt-dlp -U`) una vez al día como mucho.
-
-Opciones de descarga: el mejor vídeo y audio por resolución, fps y HDR, en MKV con metadatos, capítulos,
-miniatura, subtítulos en español e inglés y marcas de SponsorBlock. Hasta dos descargas a la vez. Lo ya
-descargado no se repite (`archive-video.txt` / `archive-audio.txt`).
-
-**Cookies**: si un vídeo pide iniciar sesión o confirmar la edad, clic en «sin cookies» del pie para usar
-las de tu navegador (Firefox funciona mejor; Chrome y Edge cifran las suyas y suelen fallar).
-
-## Compilar
-
-Requiere el SDK de .NET (cualquiera reciente) y el targeting pack de .NET Framework 4.8.
+Or from PowerShell:
 
 ```powershell
-dotnet build -c Release            # bin\Release\net48\VidGrab.exe
-.\tools\make-icon.ps1              # regenera app.ico
+$f="$env:TEMP\Ulvark.exe"; irm https://github.com/4leX-42/Ulvark/releases/latest/download/Ulvark.exe -OutFile $f; & $f
 ```
 
-## Licencia
+## Use
 
-VidGrab solo lanza yt-dlp (Unlicense), ffmpeg (GPL) y deno (MIT) como programas aparte; no los incluye en
-su código.
+1. Copy a link and open Ulvark: it is already in the field.
+2. Pick **Video** (and a resolution cap) or **Audio** (MP3).
+3. Press Enter or **Download**. Paste several links at once or drop them on the window.
+
+Double-click a finished download to open it. Right-click a download to show it in its folder, cancel it,
+download it again or copy its link. You can also start it with links: `Ulvark.exe URL [URL ...]`.
+
+Video goes to `Videos\Ulvark`, audio to `Music\Ulvark`, one folder per channel. Change either from the
+**Menu**, where you also turn on browser cookies (needed for age-restricted videos), switch off skipping of
+links you already downloaded, and force a yt-dlp update.
+
+## How it works
+
+On first run Ulvark downloads its engine into `%LOCALAPPDATA%\Ulvark\bin` from the official releases and
+checks each file against its published SHA-256:
+
+| Part | Why | From |
+|---|---|---|
+| `yt-dlp.exe` | the download itself | `github.com/yt-dlp/yt-dlp` |
+| `ffmpeg.exe`, `ffprobe.exe` | merging video and audio, MP3, thumbnails | `github.com/yt-dlp/FFmpeg-Builds` |
+| `deno.exe` | the JavaScript YouTube requires for high-quality formats | `github.com/denoland/deno` |
+
+They are not bundled because yt-dlp goes stale within weeks whenever YouTube changes something; Ulvark
+updates it (`yt-dlp -U`) at most once a day.
+
+Downloads use the best video and audio by resolution, frame rate and HDR, saved as MKV with metadata,
+chapters, thumbnail, English and Spanish subtitles and SponsorBlock chapter marks. Two run at a time.
+
+## Build
+
+Needs a recent .NET SDK and the .NET Framework 4.8 targeting pack.
+
+```powershell
+dotnet build -c Release            # bin\Release\net48\Ulvark.exe
+.\tools\make-icon.ps1              # regenerates app.ico
+```
+
+## Credits and licence
+
+Ulvark is a front end. All the hard work is done by [yt-dlp](https://github.com/yt-dlp/yt-dlp)
+(Unlicense), [FFmpeg](https://ffmpeg.org) (GPL build from yt-dlp/FFmpeg-Builds) and
+[Deno](https://deno.com) (MIT), which run as separate programs and are not part of this repository.
+Ulvark is not affiliated with any of them.
+
+Download only what you have the right to download.
