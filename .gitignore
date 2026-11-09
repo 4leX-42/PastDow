@@ -1,0 +1,5 @@
+bin/
+obj/
+*.user
+tools/icon-preview.png
+desktop.ini
