@@ -75,6 +75,8 @@ namespace Ulvark
     {
         public static event Action<Job> Finished;
 
+        // subtitle files also print a destination; they are not a video/audio part
+        static readonly Regex SubFile = new Regex(@"\.(vtt|srt|ass|ttml|srv\d|json3)$", RegexOptions.IgnoreCase);
         static readonly Regex Ansi = new Regex(@"\x1B\[[0-9;]*[A-Za-z]");
 
         public static void Start(Job j)
@@ -157,7 +159,7 @@ namespace Ulvark
             }
             if (s.StartsWith("VGT|")) { j.Title = s.Substring(4); return; }
             if (s.StartsWith("VGF|")) { j.File = s.Substring(4); return; }
-            if (s.StartsWith("[download] Destination:")) { j.Phase++; j.Percent = 0; j.Shown = 0; j.Started = true; return; }
+            if (s.StartsWith("[download] Destination:") && !SubFile.IsMatch(s)) { j.Phase++; j.Percent = 0; j.Shown = 0; j.Started = true; return; }
             if (s.Contains("has already been recorded in the archive")) { j.State = JobState.Skipped; return; }
             if (s.StartsWith("[Merger]") || s.StartsWith("[ExtractAudio]") || s.StartsWith("[EmbedThumbnail]") || s.StartsWith("[Metadata]"))
             {
