@@ -8,7 +8,9 @@
 
 &nbsp;
 
-**Paste** — one link, a whole list, or drop a .txt full of them
+**Paste** — one link, or a whole list at once
+
+**Drop** — a .txt full of links onto the window and every video downloads, two at a time
 
 **Select** — video up to 4K HDR in MKV, MP4 or WebM · audio untouched at source quality, or MP3, M4A, FLAC, WAV, Opus
 
