@@ -29,7 +29,9 @@ namespace Ulvark
                 return;
             }
 
-            if (!Installer.RunningInstalled && !Installer.PortableChosen && Environment.GetEnvironmentVariable("ULVARK_NO_SETUP") != "1")
+            // a copy installed by winget is already managed by winget: no install/portable question
+            bool fromWinget = Installer.Self.IndexOf(@"\WinGet\", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (!Installer.RunningInstalled && !Installer.PortableChosen && !fromWinget && Environment.GetEnvironmentVariable("ULVARK_NO_SETUP") != "1")
             {
                 using (var f = new SetupForm(SetupForm.Kind.Setup))
                 {

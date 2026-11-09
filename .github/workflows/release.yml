@@ -1,0 +1,36 @@
+name: release
+
+# A tag like v2.0.2 builds Ulvark.exe on GitHub's own Windows machine and publishes it as the release asset.
+# Building here (not on a personal PC) is what code-signing services for open source, such as SignPath, require.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build
+        run: dotnet build Ulvark.csproj -c Release -nologo
+
+      - name: SHA-256
+        shell: pwsh
+        run: (Get-FileHash bin/Release/net48/Ulvark.exe -Algorithm SHA256).Hash
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $notes = git tag -l --format='%(contents)' $env:GITHUB_REF_NAME
+          if (-not $notes) { $notes = "Ulvark $env:GITHUB_REF_NAME" }
+          gh release create $env:GITHUB_REF_NAME bin/Release/net48/Ulvark.exe --title "Ulvark $($env:GITHUB_REF_NAME.TrimStart('v'))" --notes "$notes"

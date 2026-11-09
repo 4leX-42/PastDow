@@ -2,7 +2,7 @@
 
 <p align="center">Any video. Best quality. One click</p>
 
-<p align="center"><a href="https://github.com/4leX-42/Ulvark/releases/latest/download/Ulvark.exe"><b>DOWNLOAD FOR WINDOWS →</b></a></p>
+<p align="center"><a href="https://github.com/4leX-42/Ulvark/releases/latest/download/Ulvark.exe"><b>DOWNLOAD FOR WINDOWS →</b></a><br><sub>or <code>winget install 4leX-42.Ulvark</code></sub></p>
 
 <p align="center"><img src="assets/screenshot.png" width="760" alt="Ulvark"></p>
 
@@ -32,4 +32,4 @@ dotnet build -c Release
 
 &nbsp;
 
-<sub>A front end for yt-dlp (Unlicense), FFmpeg (GPL) and Deno (MIT), run as separate programs · not affiliated with them · built with the help of AI · download only what you have the right to</sub>
+<sub>A front end for yt-dlp (Unlicense), FFmpeg (GPL) and Deno (MIT), run as separate programs · not affiliated with them · built with the help of AI · MIT licence · download only what you have the right to</sub>
