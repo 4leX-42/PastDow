@@ -32,6 +32,7 @@ namespace PastDow
         public bool CancelRequested;
         public bool EngineSuspect;  // the error looks like yt-dlp is out of date (site changed), not a user-side problem
         public bool FixTried;       // already retried after an automatic yt-dlp update
+        public string InfoJson;     // X posts: video files found through the FixTweet API, fed to yt-dlp with --load-info-json
 
         // UI-only animation state
         public readonly long Added = Environment.TickCount;
@@ -88,6 +89,28 @@ namespace PastDow
         {
             j.State = JobState.Running;
             j.Percent = 0; j.Phase = 0; j.Started = false; j.Speed = j.Eta = ""; j.Error = null; j.File = null;
+            if (XPost.Is(j.Url))
+            {
+                // network call: off the UI thread, then start yt-dlp from there
+                System.Threading.Tasks.Task.Run(() =>
+                {
+                    j.InfoJson = XPost.Resolve(j.Url, j.Id);
+                    if (j.CancelRequested) { j.State = JobState.Canceled; DropInfo(j); Finished?.Invoke(j); return; }
+                    Launch(j);
+                });
+                return;
+            }
+            Launch(j);
+        }
+
+        static void DropInfo(Job j)
+        {
+            try { if (j.InfoJson != null) File.Delete(j.InfoJson); } catch { }
+            j.InfoJson = null;
+        }
+
+        static void Launch(Job j)
+        {
             try
             {
                 Directory.CreateDirectory(j.Folder);
@@ -107,6 +130,7 @@ namespace PastDow
             {
                 j.State = JobState.Failed;
                 j.Error = "Could not start yt-dlp: " + ex.Message;
+                DropInfo(j);
                 Finished?.Invoke(j);
             }
         }
@@ -161,6 +185,7 @@ namespace PastDow
             }
             j.Speed = j.Eta = "";
             if (j.State == JobState.Done) CleanSidecars(j.File);
+            DropInfo(j);
             try { p.Dispose(); } catch { }
             j.Proc = null;
             Finished?.Invoke(j);
@@ -212,10 +237,12 @@ namespace PastDow
             e.Contains("Unsupported URL") || e.Contains("getaddrinfo") || e.Contains("timed out") || e.Contains("Requested format is not available") ||
             e.Contains("not available in your country") || e.Contains("members-only") || e.Contains("Join this channel") ||
             e.Contains("Sign in to confirm your age") || e.Contains("No space left") || e.Contains("Permission denied") ||
-            e.Contains("logged-in") || e.Contains("login required") || e.Contains("log in") || e.Contains("empty media response") || e.Contains("--cookies");
+            e.Contains("logged-in") || e.Contains("login required") || e.Contains("log in") || e.Contains("empty media response") || e.Contains("--cookies") ||
+            e.Contains("No video could be found in this tweet");
 
         static string Friendly(string e)
         {
+            if (e.Contains("No video could be found in this tweet")) return "No video found in this post · it may have only images, or X is blocking it right now";
             if (e.Contains("Sign in to confirm your age")) return "Age-restricted video: YouTube asks to sign in for this one";
             if (e.Contains("Sign in to confirm") && e.Contains("bot")) return "YouTube is asking to verify you are not a bot · try again in a while";
             if (e.Contains("Private video")) return "Private video";
@@ -277,8 +304,8 @@ namespace PastDow
                 a.Add("--no-overwrites");
                 if (Settings.SkipDone) { a.Add("--download-archive"); a.Add(Settings.Archive(j.Audio)); }
             }
-            a.Add("--");
-            a.Add(j.Url);
+            if (j.InfoJson != null) { a.Add("--load-info-json"); a.Add(j.InfoJson); }
+            else { a.Add("--"); a.Add(j.Url); }
             var sb = new StringBuilder();
             foreach (var x in a) { if (sb.Length > 0) sb.Append(' '); sb.Append(Quote(x)); }
             return sb.ToString();
