@@ -124,7 +124,8 @@
   .sub.err { color:#e07a72; letter-spacing:.02em; }
   .acts { display:flex; gap:16px; opacity:0; transition:opacity .25s; }
   .row:hover .acts { opacity:1; }
-  .acts button { font-size:11px; letter-spacing:.2em; color:var(--sub); font-weight:400; }
+  .acts button { font-size:11px; letter-spacing:.2em; color:var(--sub); font-weight:400; display:flex; align-items:center; gap:7px; }
+  .acts button svg { width:13px; height:11px; flex:none; }
   .acts button:hover { color:var(--fg); }
   .pbar { position:absolute; left:0; bottom:0; height:1px; background:#fff; box-shadow:0 0 10px rgba(255,255,255,.7); transition:width .3s linear; }
   .row.fin .pbar { background:#3a3a3a; box-shadow:none; }
@@ -285,6 +286,12 @@ const $ = id => document.getElementById(id);
 const win = $('win');
 function fit() { win.style.transform = `scale(${Math.min(innerWidth / 1120, innerHeight / 630)})`; }
 addEventListener('resize', fit); fit();
+
+// small icons beside the row actions: OPEN = the file itself, FOLDER = where it lives
+const ACT_ICO = {
+  open: '<svg viewBox="0 0 13 11" fill="none" stroke="currentColor" stroke-width="1"><path d="M5.5 1.5h-5v9h9v-4"/><path d="M8 .5h4.5V5M12.5 .5 6 7"/></svg>',
+  reveal: '<svg viewBox="0 0 18 14" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M.5 2.5v10h17v-9H8L6.5 1.5h-6z"/></svg>'
+};
 
 // ---- bridge: the app (WebView2) or a demo when opened in a browser ----
 const host = window.chrome && window.chrome.webview;
@@ -461,7 +468,7 @@ function renderJobs(jobs) {
       r.innerHTML = '<div class="pct"></div><div style="min-width:0"><div class="ttl"></div><div class="sub"></div></div><div class="acts"></div><div class="pbar"></div>';
       list.appendChild(r); list.scrollTop = list.scrollHeight;
       r.addEventListener('dblclick', () => send({ t: 'open', id: j.id }));
-      r.querySelector('.acts').addEventListener('click', e => { const a = e.target.dataset.a; if (a === 'copy') send({ t: 'copy', text: r.dataset.url }); else if (a) send({ t: a, id: +r.dataset.id }); });
+      r.querySelector('.acts').addEventListener('click', e => { const b = e.target.closest('button'); const a = b && b.dataset.a; if (a === 'copy') send({ t: 'copy', text: r.dataset.url }); else if (a) send({ t: a, id: +r.dataset.id }); });
     }
     r.dataset.url = j.url;
     const fin = ['done', 'skipped', 'failed', 'canceled'].includes(j.state);
@@ -480,7 +487,7 @@ function renderJobs(jobs) {
     if (pct.dataset.v !== left) { pct.innerHTML = left; pct.dataset.v = left; }
     r.querySelector('.ttl').textContent = j.title || j.url;
     const s = r.querySelector('.sub'); s.textContent = sub; s.classList.toggle('err', j.state === 'failed');
-    const ah = acts.map(([a, l]) => `<button data-a="${a}">${l}</button>`).join('');
+    const ah = acts.map(([a, l]) => `<button data-a="${a}">${ACT_ICO[a] || ''}${l}</button>`).join('');
     const ae = r.querySelector('.acts'); if (ae.dataset.v !== ah) { ae.innerHTML = ah; ae.dataset.v = ah; }
     r.querySelector('.pbar').style.width = (j.state === 'running' && j.started ? j.pct : j.state === 'processing' || j.state === 'done' ? 100 : 0) + '%';
   });
