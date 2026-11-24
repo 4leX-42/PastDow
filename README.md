@@ -6,7 +6,7 @@ Any video. Best quality. One click
 
 ![Windows 11](https://img.shields.io/badge/Windows-11-1f1f1f?style=flat-square) ![.NET 4.8](https://img.shields.io/badge/.NET-4.8_%C2%B7_WebView2-1f1f1f?style=flat-square&logo=dotnet&logoColor=white) ![yt-dlp](https://img.shields.io/badge/powered_by-yt--dlp-1f1f1f?style=flat-square) ![release](https://img.shields.io/github/v/release/4leX-42/PastDow?style=flat-square&color=e6c34a&label=release)
 
-<a href="https://github.com/4leX-42/PastDow/releases/latest/download/PastDow.exe"><b>DOWNLOAD FOR WINDOWS →</b></a><br><sub>or <code>winget install 4leX-42.PastDow</code></sub>
+<a href="https://github.com/4leX-42/PastDow/releases/latest/download/PastDow.exe"><b>DOWNLOAD FOR WINDOWS →</b></a>
 
 <img src="assets/screenshot.png" width="760" alt="PastDow">
 
