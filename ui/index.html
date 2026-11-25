@@ -202,8 +202,12 @@
   .browser-view .h1, .browser-view .h2, .browser-view .pill, .browser-view .link, .browser-view #url,
   .browser-view .orb, .browser-view .ring, .browser-view .flare, .browser-view .beam, .browser-view .dl { display:none; }
   .browser-view .opts.idle { opacity:1; }
-  .pair-key { background:#111; border:1px solid #333; color:var(--sub); width:100%; padding:7px; margin:7px 0; font:11px monospace; user-select:text; }
+  .pair-key { position:static; left:auto; top:auto; height:auto; min-width:0; background:#111; border:1px solid #333; color:var(--sub); width:100%; padding:7px; margin:7px 0; font:11px monospace; user-select:text; }
   #copyKey { font-size:11px; letter-spacing:.2em; color:var(--fg); padding:5px 0; }
+  .ext-buttons { display:flex; flex-wrap:wrap; gap:8px 20px; margin:10px 0 2px; }
+  .ext-buttons button { font-size:11px; letter-spacing:.2em; color:var(--fg); padding:4px 0; border-bottom:1px solid #3a3a3a; transition:border-color .2s; }
+  .ext-buttons button:hover { border-color:var(--fg); }
+  .ext-key { display:flex; align-items:center; gap:12px; margin-top:8px; } .ext-key .pair-key { margin:0; flex:1; }
   #browserStatus { white-space:normal; }
 </style>
 </head>
@@ -248,7 +252,7 @@
   <section class="browser-box">
     <div class="browser-head"><span>FOUND IN YOUR BROWSER</span><button id="foundClear">CLEAR ALL</button></div>
     <div class="browser-items" id="foundItems"></div>
-    <div class="browser-empty" id="foundEmpty">Nothing yet. Play a video in your browser and it shows up here.<br>First time: add the PastDow extension and paste the key from MENU into it.</div>
+    <div class="browser-empty" id="foundEmpty">Nothing yet. Play a video in your browser and it shows up here.<br>First time: MENU, BROWSER EXTENSION, then ADD TO your browser.</div>
   </section>
   <div class="vline"></div>
   <div class="steps intro" style="animation-delay:.15s">
@@ -302,7 +306,8 @@
     </div>
     <button class="it" style="transition-delay:.30s" id="mUpdate"><b>UPDATE YT-DLP</b><em></em></button>
     <button class="it" style="transition-delay:.36s" id="mSource"><b>SOURCE CODE</b><em>github.com/4leX-42/PastDow</em></button>
-    <div class="it" style="transition-delay:.38s"><b>BROWSER EXTENSION</b><input id="browserKey" class="pair-key" readonly aria-label="Browser pairing key"><button id="copyKey">COPY</button><em id="browserStatus"></em></div>
+    <div class="it" style="transition-delay:.38s"><b>BROWSER EXTENSION</b><div class="ext-buttons" id="extButtons"></div><em id="browserStatus"></em>
+      <div class="ext-key"><input id="browserKey" class="pair-key" readonly aria-label="Browser pairing key"><button id="copyKey">COPY KEY</button></div></div>
     <div class="ver" id="ver"></div>
     <div class="dd" id="dd"></div>
   </div>
@@ -407,7 +412,14 @@ function selectView(browser) {
 $('pasteTab').onclick = () => selectView(false);
 $('browserTab').onclick = () => selectView(true);
 $('foundClear').onclick = () => send({ t: 'foundClear' });
-$('copyKey').onclick = () => { send({ t: 'browserKey' }); $('copyKey').textContent = 'COPIED'; setTimeout(() => $('copyKey').textContent = 'COPY', 2000); };
+$('copyKey').onclick = () => { send({ t: 'browserKey' }); $('copyKey').textContent = 'COPIED'; setTimeout(() => $('copyKey').textContent = 'COPY KEY', 2000); };
+let extHelp = '';
+function renderBrowsers(list) {
+  const box = $('extButtons'); if (box.dataset.done === String(list.length)) return;
+  box.dataset.done = String(list.length); box.replaceChildren();
+  list.forEach(b => { const btn = document.createElement('button'); btn.textContent = 'ADD TO ' + b.name.toUpperCase();
+    btn.onclick = () => send({ t: 'installExt', browser: b.id }); box.append(btn); });
+}
 function renderFound(items) {
   $('foundCount').textContent = items.length || '';
   $('foundEmpty').hidden = items.length > 0;
@@ -503,13 +515,21 @@ function receive(m) {
     $('mFolders').querySelector('em').textContent = m.channelFolders ? 'One folder per channel' : 'Off · straight into the folder';
     $('mUpdate').querySelector('em').textContent = m.update;
     $('browserKey').value = m.browserKey || '';
-    $('browserStatus').textContent = m.browserStatus || 'Paste this key into the extension popup';
+    renderBrowsers(m.browsers || []);
+    $('browserStatus').textContent = m.browserStatus || extHelp || ((m.browsers || []).length
+      ? 'Catch the videos you play in your browser, with subtitles'
+      : 'Needs Chrome, Brave or Edge');
     $('ver').textContent = 'PAST&DOW ' + m.version + ' · POWERED BY YT-DLP';
     $('h2').textContent = m.engine || 'And let PastDow do the rest';
     $('setup').style.width = m.enginePct >= 0 ? (m.enginePct * 588) + 'px' : '0';
   }
   if (m.t === 'jobs') renderJobs(m.jobs);
   if (m.t === 'found') renderFound(m.items);
+  if (m.t === 'extOpened') {
+    extHelp = m.ok ? 'In the page that opened: turn on Developer mode, press Load unpacked, paste with Ctrl+V and Select folder. It pairs by itself'
+                   : 'Could not open that browser';
+    $('browserStatus').textContent = extHelp; if (m.ok) toast('FOLDER PATH COPIED');
+  }
 }
 
 function renderJobs(jobs) {

@@ -3,3 +3,4 @@ obj/
 *.user
 tools/icon-preview.png
 desktop.ini
+extension/pairing.json

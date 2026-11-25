@@ -1,0 +1,88 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Text;
+using Microsoft.Win32;
+
+namespace PastDow
+{
+    /// <summary>
+    /// "Install the browser extension" from the menu. Browsers do not let a program add an extension by itself
+    /// (only the Web Store or company policies can), so PastDow does everything around it: it unpacks the extension
+    /// that travels inside the exe to %LOCALAPPDATA%\PastDow\extension with a pairing.json holding the key (so the
+    /// extension pairs itself), opens that browser's extensions page and puts the folder path on the clipboard.
+    /// The user only turns on Developer mode, presses "Load unpacked" and pastes the path.
+    /// </summary>
+    static class ExtensionSetup
+    {
+        public sealed class Browser { public string Id, Name, Exe, Page; }
+
+        public static string Folder => Path.Combine(Settings.Home, "extension");
+
+        static readonly string Local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        static readonly string Pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        static readonly string Pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+
+        static readonly (string id, string name, string exe, string page, string[] paths)[] Known =
+        {
+            ("chrome", "Chrome", "chrome.exe", "chrome://extensions", new[] { @"Google\Chrome\Application\chrome.exe" }),
+            ("brave", "Brave", "brave.exe", "brave://extensions", new[] { @"BraveSoftware\Brave-Browser\Application\brave.exe" }),
+            ("edge", "Edge", "msedge.exe", "edge://extensions", new[] { @"Microsoft\Edge\Application\msedge.exe" }),
+        };
+
+        /// <summary>Installed Chromium browsers that can load the extension, in a fixed order.</summary>
+        public static List<Browser> Found()
+        {
+            var list = new List<Browser>();
+            foreach (var k in Known)
+            {
+                string exe = AppPath(k.exe) ?? k.paths.SelectMany(p => new[] { Path.Combine(Local, p), Path.Combine(Pf, p), Path.Combine(Pf86, p) }).FirstOrDefault(File.Exists);
+                if (exe != null) list.Add(new Browser { Id = k.id, Name = k.name, Exe = exe, Page = k.page });
+            }
+            return list;
+        }
+
+        static string AppPath(string exe)
+        {
+            foreach (var hive in new[] { Registry.CurrentUser, Registry.LocalMachine })
+                try
+                {
+                    using (var key = hive.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\App Paths\" + exe))
+                        if (key?.GetValue(null) is string p && File.Exists(p.Trim('"'))) return p.Trim('"');
+                }
+                catch { }
+            return null;
+        }
+
+        /// <summary>Writes the extension files (always the copy inside this exe, so it matches the app) and pairing.json.</summary>
+        public static void Unpack()
+        {
+            string dir = Folder;
+            Directory.CreateDirectory(dir);
+            var asm = Assembly.GetExecutingAssembly();
+            foreach (var name in asm.GetManifestResourceNames().Where(n => n.StartsWith("ext/", StringComparison.Ordinal)))
+            {
+                string rel = name.Substring(4).Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
+                string target = Path.GetFullPath(Path.Combine(dir, rel));
+                if (!target.StartsWith(Path.GetFullPath(dir) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) continue;
+                Directory.CreateDirectory(Path.GetDirectoryName(target));
+                using (var src = asm.GetManifestResourceStream(name))
+                using (var dst = File.Create(target)) src.CopyTo(dst);
+            }
+            File.WriteAllText(Path.Combine(dir, "pairing.json"), "{\"key\":\"" + Settings.BrowserKey + "\"}", new UTF8Encoding(false));
+        }
+
+        /// <summary>Unpacks, opens the browser's extensions page and returns the folder to paste in "Load unpacked".</summary>
+        public static string Open(string id)
+        {
+            var b = Found().FirstOrDefault(x => x.Id == id);
+            if (b == null) return null;
+            Unpack();
+            Process.Start(new ProcessStartInfo(b.Exe, b.Page) { UseShellExecute = false });
+            return Folder;
+        }
+    }
+}

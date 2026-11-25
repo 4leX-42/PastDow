@@ -251,6 +251,15 @@ namespace PastDow
                         break;
                     }
                 case "browserKey": try { Clipboard.SetText(Settings.BrowserKey); lastClip = Settings.BrowserKey; } catch { } break;
+                case "installExt":
+                    {
+                        // browsers only accept an extension from the user's hand: open the page, the folder path goes to the clipboard
+                        string folder = null;
+                        try { folder = ExtensionSetup.Open(S("browser")); } catch { }
+                        if (folder != null) { try { Clipboard.SetText(folder); lastClip = folder; } catch { } }
+                        Post(new { t = "extOpened", ok = folder != null, folder = folder ?? "" });
+                        break;
+                    }
                 case "def":
                     {
                         string k = S("key"), v = S("value");
@@ -317,8 +326,18 @@ namespace PastDow
                 q = Settings.MaxHeight, vfmt = Settings.VideoFormat, afmt = Settings.AudioFormat,
                 videoDir = Settings.VideoDir, audioDir = Settings.AudioDir, videoFree = Free(Settings.VideoDir), audioFree = Free(Settings.AudioDir), skip = Settings.SkipDone, channelFolders = Settings.ChannelFolders, update = updateNote,
                 engine = engineStatus, enginePct = enginePct, ready = engineReady, version = Installer.Version,
-                browserKey = Settings.BrowserKey, browserStatus
+                browserKey = Settings.BrowserKey, browserStatus, browsers = Browsers()
             });
+        }
+
+        List<object> browsers;
+        /// <summary>Chromium browsers found on this PC (looked up once), for the extension install buttons.</summary>
+        List<object> Browsers()
+        {
+            if (browsers == null)
+                try { browsers = ExtensionSetup.Found().Select(x => (object)new { id = x.Id, name = x.Name }).ToList(); }
+                catch { browsers = new List<object>(); }
+            return browsers;
         }
 
         void PushFound()
