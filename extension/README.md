@@ -7,14 +7,13 @@ the page's subtitles along.
 ## Install
 
 In PastDow open **MENU**, go to **BROWSER EXTENSION** and press **ADD TO CHROME**, **ADD TO BRAVE** or **ADD TO EDGE**
-(only the browsers you have are shown). PastDow unpacks the extension, opens that browser's extensions page and copies
-the folder path. There:
+(only the browsers you have are shown). PastDow opens the browser and clicks through its steps for you: extensions
+page, Developer mode, Load unpacked, the folder. Leave the mouse alone for those few seconds. The extension then
+pairs with PastDow by itself.
 
-1. Turn on **Developer mode** (top right).
-2. Press **Load unpacked**, paste the path with Ctrl+V and press **Select folder**.
-
-That is all: the extension pairs with PastDow by itself. Browsers do not let a program add an extension on its own,
-which is why those two clicks are yours.
+Browsers do not let a program add an extension silently, so PastDow drives the same screens you would. If one of
+them changes and a step fails, PastDow leaves the extensions page open, copies the folder path and tells you the two
+clicks left: **Developer mode**, then **Load unpacked** and paste the path with Ctrl+V.
 
 By hand: load this `extension` folder the same way, then paste the key from **MENU > BROWSER EXTENSION > COPY KEY**
 into the extension popup and press **PAIR**.
