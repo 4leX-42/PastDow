@@ -9,7 +9,8 @@ for (const icon of Object.values(manifest.icons)) assert.equal(fs.readFileSync(p
 for (const file of ['background.js', 'popup.js']) new vm.Script(fs.readFileSync(path.join(root, 'extension', file), 'utf8'));
 new vm.Script(fs.readFileSync(path.join(root, 'ui/index.html'), 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1]);
 const session = {}, local = { key: 'a'.repeat(64) }, sent = [], events = {};
-let offline = false, reject = false;
+let offline = false, reject = false, impostor = false;
+const nodeCrypto = require('node:crypto');
 const storage = data => ({
   get: async key => ({ [key]: data[key] }),
   set: async value => Object.assign(data, structuredClone(value)),
@@ -24,10 +25,16 @@ const chrome = {
   webNavigation: { onBeforeNavigate: { addListener: f => events.navigate = f } },
   runtime: { id: 'test', onMessage: { addListener: f => events.message = f } }
 };
-const context = vm.createContext({ chrome, URL, navigator: { userAgent: 'Browser Test' }, TextEncoder, AbortSignal,
+const context = vm.createContext({ chrome, URL, navigator: { userAgent: 'Browser Test' }, TextEncoder, AbortSignal, crypto: globalThis.crypto, Uint8Array,
   btoa: value => Buffer.from(value, 'binary').toString('base64'),
   fetch: async (url, options) => {
     if (offline) throw new TypeError('Failed to fetch');
+    if (url.includes('/hello?c=')) {
+      // PastDow signs the challenge with the pairing key; an impostor on the port cannot
+      const challenge = new URL(url).searchParams.get('c');
+      const proof = impostor ? 'f'.repeat(64) : nodeCrypto.createHmac('sha256', local.key).update('pastdow-hello:' + challenge).digest('hex');
+      return { ok: true, status: 200, json: async () => ({ proof }) };
+    }
     sent.push({ url, options }); return { ok: !reject, status: reject ? 403 : 200 };
   } });
 const source = fs.readFileSync(path.join(root, 'extension/background.js'), 'utf8');
@@ -77,10 +84,15 @@ const detect = (url, type, length, tabId = 1) => events.headers({ tabId, url, st
   const body = JSON.parse(Buffer.from(fallback.protocol.split('d=')[1], 'base64url').toString());
   assert.equal(body.key, local.key); assert.equal(body.subtitles[0].lang, 'es');
   assert.equal(body.cookie, 'session=cdn.example');
-  offline = false; reject = true;
+  offline = false; impostor = true;
+  const before = sent.length;
+  // something else on the port: nothing is sent and the protocol fallback is not used either
+  const squat = await message({ t: 'download', tabId: 1, id });
+  assert.match(squat.error, /another program/); assert.equal(squat.protocol, undefined); assert.equal(sent.length, before);
+  impostor = false; reject = true;
   assert.match((await message({ t: 'download', tabId: 1, id })).error, /rejected/);
   events.navigate({ tabId: 1, frameId: 1 }); await flush(); assert.equal(session['tab:1'].media.length, 1);
   events.navigate({ tabId: 1, frameId: 0 }); await flush(); assert.equal(session['tab:1'], undefined);
   assert.equal(session['tab:2'].media.length, 1);
-  console.log('Extension: manifest, icons, JavaScript syntax, filters, sizes, subtitles, dedupe, per-tab state, headers, queue, fallback, auth rejection and navigation passed');
+  console.log('Extension: manifest, icons, JavaScript syntax, filters, sizes, subtitles, dedupe, per-tab state, headers, queue, fallback, server proof, auth rejection and navigation passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

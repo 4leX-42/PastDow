@@ -30,6 +30,7 @@ segments are skipped. DRM-protected video (Netflix and the like) cannot be downl
 ## Privacy
 
 The extension needs access to all sites to see what a page loads and to read the cookies that the video needs.
-It sends them only to PastDow on this PC (`http://127.0.0.1:47821`, every request signed with the pairing key)
+It sends them only to PastDow on this PC (`http://127.0.0.1:47821`). PastDow first has to sign a random challenge
+with the pairing key, so another program on that port gets nothing,
 and keeps nothing after the tab closes. A `pastdow:` link carries the same cookies and the key: do not share it.
 Download only what you have the right to.
