@@ -20,6 +20,8 @@ into the extension popup and press **PAIR**.
 
 ## Use
 
+Detected videos show a thumbnail and duration when the page makes them available.
+
 Play the video. The icon shows how many videos it found in that tab, and each one also appears at once in
 PastDow's **BROWSER** tab. Click it there to download it with the quality and format picked on screen, or press
 **DOWNLOAD** in the popup to use your saved defaults. If the video was already playing when you installed the

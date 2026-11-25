@@ -356,14 +356,20 @@ namespace PastDow
         void PushFound()
         {
             Post(new { t = "found", items = found.Select(x => new { id = x.Key, title = x.Value.title, kind = x.Value.kind, size = x.Value.size,
-                host = new Uri(x.Value.url).Host, subtitles = x.Value.subtitles.Count }).ToList() });
+                host = new Uri(x.Value.url).Host, subtitles = x.Value.subtitles.Count, thumb = x.Value.thumb, duration = x.Value.duration }).ToList() });
         }
 
         void AddFound(BrowserMedia media)
         {
             int index = found.FindIndex(x => x.Value.Identity == media.Identity);
             int id = index >= 0 ? found[index].Key : ++nextFound;
-            if (index >= 0) { media.size = Math.Max(media.size, found[index].Value.size); found.RemoveAt(index); }
+            if (index >= 0) {
+                var previous = found[index].Value;
+                media.size = Math.Max(media.size, previous.size);
+                media.thumb = media.thumb ?? previous.thumb;
+                if (media.duration == 0) media.duration = previous.duration;
+                found.RemoveAt(index);
+            }
             found.Insert(0, new KeyValuePair<int, BrowserMedia>(id, media));
             if (found.Count > 200) found.RemoveAt(found.Count - 1);
             PushFound();

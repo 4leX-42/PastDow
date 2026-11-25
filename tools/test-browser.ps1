@@ -86,6 +86,21 @@ public static class BrowserChecks
         Check(!(bool)Call(mediaType, js.Deserialize(Body("file:///bad.mp4", "https://subs.example/a.vtt"), mediaType), "Valid"), "reject file media");
         Check(!(bool)Call(mediaType, js.Deserialize(Body("https://cdn.example/a.mp4", "javascript:bad"), mediaType), "Valid"), "reject subtitle scheme");
         Check(!(bool)Call(mediaType, js.Deserialize(body.Replace("media=value", "media=value\\r\\nInjected: yes"), mediaType), "Valid"), "reject header injection");
+        foreach (string thumb in new[] { "data:image/jpeg;base64,AQID", "data:image/png;base64,AQID", "http://example/image.jpg", "data:image/jpeg;base64," + new string('A', 120000), "data:image/jpeg;base64,<script>alert(1)</script>", "data:image/jpeg;base64,AQ==\\n" })
+        {
+            var fields = js.Deserialize<Dictionary<string, object>>(body); fields["thumb"] = thumb; fields["duration"] = 125.5;
+            object candidate = js.Deserialize(js.Serialize(fields), mediaType);
+            Check((bool)Call(mediaType, candidate, "Valid"), "bad thumbnail still accepts media");
+            bool good = thumb == "data:image/jpeg;base64,AQID" || thumb == "data:image/png;base64,AQID";
+            Check((string)mediaType.GetProperty("thumb").GetValue(candidate, null) == (good ? thumb : null), "thumbnail validation");
+            Check((double)mediaType.GetProperty("duration").GetValue(candidate, null) == 125.5, "duration retained");
+        }
+        foreach (double duration in new[] { -1.0, 86401.0, double.NaN, double.PositiveInfinity, double.NegativeInfinity, 0.0, 86400.0 })
+        {
+            mediaType.GetProperty("duration").SetValue(media, duration, null);
+            Check((bool)Call(mediaType, media, "Valid"), "bad duration still accepts media");
+            Check((double)mediaType.GetProperty("duration").GetValue(media, null) == (duration >= 0 && duration <= 86400 ? duration : 0), "duration validation");
+        }
         object job = Call(mediaType, media, "Job", false, 1080, "mkv");
         Check((bool)job.GetType().GetField("Captured", Flags).GetValue(job), "captured job");
         string info = (string)Call(T("CapturedMedia"), null, "Info", job);
@@ -140,7 +155,7 @@ public static class BrowserChecks
             Check(Request(listener, receiver, port, "POST", "/msg", "malformed") == 400, "malformed JSON");
         }
         ((IDisposable)receiver).Dispose();
-        Console.WriteLine("Browser: validation, header injection, job conversion, direct info JSON, subtitle headers, arguments, protocol auth, sidecar preservation and sealed HTTP endpoint (wrong key, replay, stale, pre-restart, tamper) passed");
+        Console.WriteLine("Browser: thumbnail and duration validation, header injection, job conversion, direct info JSON, subtitle headers, arguments, protocol auth, sidecar preservation and sealed HTTP endpoint (wrong key, replay, stale, pre-restart, tamper) passed");
         Type instanceType = T("SingleInstance");
         instanceType.GetField("Name", Flags).SetValue(null, "PastDow.Test." + Guid.NewGuid().ToString("N"));
         object first = Activator.CreateInstance(instanceType);

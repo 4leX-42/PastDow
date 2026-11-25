@@ -1,5 +1,25 @@
 const ENDPOINT = 'http://127.0.0.1:47821';
 const chains = new Map(), generations = new Map(), pushes = new Map();
+const previews = new Map();
+const previewRetries = new Map();
+// Quality 3 marks a frame captured after readiness checks; older captures can be refreshed.
+const goodThumbnail = item => !!item.thumb && item.thumbQuality === 3;
+function stopPreviewRetries(tabId) {
+  const pending = previewRetries.get(tabId);
+  if (pending) pending.timers.forEach(clearTimeout);
+  previewRetries.delete(tabId);
+}
+function schedulePreviewRetries(tabId) {
+  if (previewRetries.has(tabId)) return;
+  const generation = generations.get(tabId) || 0;
+  const pending = { timers: [] };
+  previewRetries.set(tabId, pending);
+  pending.timers = [1500, 4000, 9000, 20000].map((delay, index) => setTimeout(async () => {
+    if (previewRetries.get(tabId) !== pending || (generations.get(tabId) || 0) !== generation) return;
+    await enrich(tabId);
+    if (index === 3 && previewRetries.get(tabId) === pending) previewRetries.delete(tabId);
+  }, delay));
+}
 const http = url => /^https?:\/\//i.test(url);
 const identity = url => { const u = new URL(url); u.search = ''; u.hash = ''; return u.href; };
 const language = url => {
@@ -34,6 +54,134 @@ async function state(tabId) {
   const name = `tab:${tabId}`;
   return (await chrome.storage.session.get(name))[name] || { media: [], subtitles: [] };
 }
+// Runs in each frame; only coordinates safely mapped to the top viewport may be captured.
+function inspectVideo() {
+  const og = document.querySelector('meta[property="og:image"]')?.content;
+  const videos = [...document.querySelectorAll('video')].map(video => {
+    const r = video.getBoundingClientRect(), style = getComputedStyle(video);
+    let x = Math.max(0, r.left), y = Math.max(0, r.top);
+    let width = Math.min(innerWidth, r.right) - x, height = Math.min(innerHeight, r.bottom) - y;
+    let win = window;
+    try {
+      while (win !== win.top) {
+        const frame = win.frameElement, f = frame.getBoundingClientRect();
+        if (getComputedStyle(frame).visibility === 'hidden') throw new Error('Hidden frame');
+        x += f.left + frame.clientLeft; y += f.top + frame.clientTop;
+        win = win.parent;
+        width = Math.min(width, f.right - x, win.innerWidth - x);
+        height = Math.min(height, f.bottom - y, win.innerHeight - y);
+      }
+    } catch { width = height = 0; }
+    const visible = style.display !== 'none' && style.visibility === 'visible' && Number(style.opacity) > 0 && x >= 0 && y >= 0 && width > 1 && height > 1;
+    // Fit the intrinsic picture inside the element rather than capturing letterboxing.
+    const inset = name => parseFloat(style[name]) || 0;
+    const left = inset('borderLeftWidth') + inset('paddingLeft'), top = inset('borderTopWidth') + inset('paddingTop');
+    let pictureWidth = r.width - left - inset('borderRightWidth') - inset('paddingRight');
+    let pictureHeight = r.height - top - inset('borderBottomWidth') - inset('paddingBottom');
+    let pictureX = r.left + left, pictureY = r.top + top;
+    if (video.videoWidth > 0 && video.videoHeight > 0 && !['fill', 'cover', 'none'].includes(style.objectFit)) {
+      const scale = Math.min(pictureWidth / video.videoWidth, pictureHeight / video.videoHeight);
+      const w = video.videoWidth * scale, h = video.videoHeight * scale;
+      pictureX += (pictureWidth - w) / 2; pictureY += (pictureHeight - h) / 2;
+      pictureWidth = w; pictureHeight = h;
+    }
+    const contentX = x + Math.max(0, pictureX - r.left), contentY = y + Math.max(0, pictureY - r.top);
+    return { rect: visible ? { x, y, width, height } : null, area: visible ? width * height : 0,
+      contentRect: visible ? { x: contentX, y: contentY, width: Math.min(pictureWidth, x + width - contentX), height: Math.min(pictureHeight, y + height - contentY) } : null,
+      readyState: video.readyState, videoWidth: video.videoWidth, videoHeight: video.videoHeight,
+      currentTime: video.currentTime, paused: video.paused, controls: video.hasAttribute('controls'),
+      devicePixelRatio, duration: Number.isFinite(video.duration) && video.duration <= 86400 ? video.duration : 0,
+      poster: video.poster, og };
+  }).sort((a, b) => b.area - a.area);
+  return videos[0] || { og, area: 0 };
+}
+function readyForThumbnail(video) {
+  return video?.readyState >= 2 && video.videoWidth > 0 && video.rect?.width >= 120 && video.rect.height >= 68 &&
+    (video.currentTime > .3 || video.paused === false);
+}
+function frameRect(video) {
+  const r = { ...(video.contentRect || video.rect) };
+  if (video.controls) {
+    r.height = Math.min(r.height, video.rect.y + video.rect.height * .82 - r.y);
+    // Center a 16:9 crop in the remaining picture, above the native controls.
+    const width = Math.min(r.width, r.height * 16 / 9), height = width * 9 / 16;
+    r.x += (r.width - width) / 2; r.y += (r.height - height) / 2;
+    r.width = width; r.height = height;
+  }
+  return r;
+}
+async function smallJpeg(blob, rect) {
+  const bitmap = await createImageBitmap(blob);
+  try {
+    const r = rect || { x: 0, y: 0, width: bitmap.width, height: bitmap.height };
+    if (r.width <= 0 || r.height <= 0 || r.x < 0 || r.y < 0 || r.x + r.width > bitmap.width + 1 || r.y + r.height > bitmap.height + 1) return null;
+    let width = Math.min(320, r.width, 1800 * r.width / r.height);
+    for (let attempt = 0; attempt < 4; attempt++, width = Math.round(width * .7)) {
+      const canvas = new OffscreenCanvas(Math.max(1, Math.round(width)), Math.max(1, Math.round(width * r.height / r.width)));
+      canvas.getContext('2d').drawImage(bitmap, r.x, r.y, r.width, r.height, 0, 0, canvas.width, canvas.height);
+      const jpeg = await canvas.convertToBlob({ type: 'image/jpeg', quality: .7 });
+      const url = 'data:image/jpeg;base64,' + b64(await jpeg.arrayBuffer());
+      if (url.length < 60000) return url;
+    }
+    return null;
+  } finally { bitmap.close(); }
+}
+function enrich(tabId) {
+  if (previews.has(tabId)) return previews.get(tabId);
+  const generation = generations.get(tabId) || 0;
+  const task = (async () => {
+    try {
+      const existing = await state(tabId);
+      if (!existing.media.length || existing.media.every(goodThumbnail)) { stopPreviewRetries(tabId); return; }
+      const results = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: inspectVideo });
+      const candidates = results.map(x => x.result).filter(Boolean).sort((a, b) => (b.area || 0) - (a.area || 0));
+      const video = candidates[0];
+      if (!video) return;
+      let thumb = null, quality = 0;
+      if (readyForThumbnail(video)) {
+        try {
+          const tab = await chrome.tabs.get(tabId);
+          const [active] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+          if (active?.id === tabId) {
+            const capture = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 70 });
+            const [stillActive] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+            if (stillActive?.id === tabId) {
+              const dpr = video.devicePixelRatio || 1, r = frameRect(video);
+              thumb = await smallJpeg(await (await fetch(capture)).blob(), { x: r.x * dpr, y: r.y * dpr, width: r.width * dpr, height: r.height * dpr });
+              if (thumb) quality = 3;
+            }
+          }
+        } catch { /* Posters can still work when capture is unavailable. */ }
+      }
+      for (const url of [video.poster, ...candidates.map(x => x.og)]) {
+        if (thumb) break;
+        if (!url || !http(url)) continue;
+        try {
+          const response = await fetch(url, { signal: AbortSignal.timeout(2000), credentials: 'omit' });
+          if (!response.ok || !/^image\//i.test(response.headers.get('content-type') || '')) continue;
+          const blob = await response.blob();
+          if (blob.size > 5000000) continue;
+          thumb = await smallJpeg(blob); if (thumb) quality = 1;
+        } catch { /* Optional metadata never prevents detection. */ }
+      }
+      await serial(tabId, async () => {
+        if ((generations.get(tabId) || 0) !== generation) return;
+        const data = await state(tabId);
+        let changed = false;
+        for (const item of data.media) {
+          if (thumb && !goodThumbnail(item) && quality > (item.thumbQuality || 0)) { item.thumb = thumb; item.thumbQuality = quality; changed = true; }
+          if (video.duration > 0 && item.duration !== video.duration) { item.duration = video.duration; changed = true; }
+        }
+        if (data.media.every(goodThumbnail)) stopPreviewRetries(tabId);
+        if (!changed) return;
+        await chrome.storage.session.set({ [`tab:${tabId}`]: data });
+        for (const item of data.media) void push(item, data, tabId, generation);
+      });
+    } catch { /* Restricted pages and frames do not expose video metadata. */ }
+  })().finally(() => { if (previews.get(tabId) === task) previews.delete(tabId); });
+  previews.set(tabId, task);
+  return task;
+}
 async function cookie(url, tabId) {
   let cookies = await chrome.cookies.getAll({ url });
   // Newer Chromium can also expose the partition used by an embedded recording player.
@@ -49,6 +197,7 @@ async function cookie(url, tabId) {
 async function payload(item, data, tabId) {
   const tab = await chrome.tabs.get(tabId);
   return { url: item.url, kind: item.kind, size: item.size, page: tab.url, title: tab.title || 'Browser video',
+    thumb: item.thumb || null, duration: item.duration || 0,
     userAgent: navigator.userAgent, cookie: await cookie(item.url, tabId),
     subtitles: await Promise.all(data.subtitles.map(async s => ({ url: s.url, lang: s.lang, ext: s.ext, cookie: await cookie(s.url, tabId) }))) };
 }
@@ -123,21 +272,25 @@ chrome.webRequest.onHeadersReceived.addListener(details => {
     if ((generations.get(tabId) || 0) !== generation) return;
     const data = await state(tabId), list = detection.subtitle ? data.subtitles : data.media;
     const id = identity(details.url), previous = list.find(x => x.id === id);
-    const item = { ...detection, id, url: details.url, size: Math.max(detection.size || 0, previous?.size || 0) };
+    const item = { ...previous, ...detection, id, url: details.url, size: Math.max(detection.size || 0, previous?.size || 0) };
     if (previous) list.splice(list.indexOf(previous), 1);
     list.unshift(item);
     list.splice(detection.subtitle ? 100 : 200);
     if ((generations.get(tabId) || 0) !== generation) return;
     await chrome.storage.session.set({ [`tab:${tabId}`]: data });
     await chrome.action.setBadgeText({ tabId, text: data.media.length ? String(data.media.length) : '' });
-    await chrome.action.setBadgeBackgroundColor({ tabId, color: '#e6c34a' });
+    await chrome.action.setBadgeBackgroundColor({ tabId, color: '#f5f5f3' });
+    await chrome.action.setBadgeTextColor?.({ tabId, color: '#000000' });
     // A later subtitle response refreshes videos already sent to the app.
     for (const media of detection.subtitle ? data.media : [item]) void push(media, data, tabId, generation);
+    if (!detection.subtitle && !goodThumbnail(item)) { schedulePreviewRetries(tabId); void enrich(tabId); }
   });
 }, { urls: ['<all_urls>'] }, ['responseHeaders']);
 
 function reset(tabId) {
   generations.set(tabId, (generations.get(tabId) || 0) + 1);
+  previews.delete(tabId);
+  stopPreviewRetries(tabId);
   void serial(tabId, async () => {
     await chrome.storage.session.remove(`tab:${tabId}`);
     await chrome.action.setBadgeText({ tabId, text: '' }).catch(() => {});
@@ -158,6 +311,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     }
     if (message.t === 'list') {
       await chains.get(message.tabId);
+      if (message.refresh !== false) { schedulePreviewRetries(message.tabId); await enrich(message.tabId); }
       const data = await state(message.tabId);
       for (const item of data.media) void push(item, data, message.tabId, generations.get(message.tabId) || 0);
       const tab = await chrome.tabs.get(message.tabId);
