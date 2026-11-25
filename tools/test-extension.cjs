@@ -8,7 +8,7 @@ assert.equal(manifest.manifest_version, 3);
 for (const icon of Object.values(manifest.icons)) assert.equal(fs.readFileSync(path.join(root, 'extension', icon)).subarray(1, 4).toString(), 'PNG');
 for (const file of ['background.js', 'popup.js']) new vm.Script(fs.readFileSync(path.join(root, 'extension', file), 'utf8'));
 new vm.Script(fs.readFileSync(path.join(root, 'ui/index.html'), 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1]);
-const session = {}, local = { key: 'a'.repeat(64) }, sent = [], events = {};
+const session = {}, local = { key: 'a'.repeat(64) }, sent = [], wire = [], events = {};
 let offline = false, reject = false, impostor = false;
 const nodeCrypto = require('node:crypto');
 const storage = data => ({
@@ -29,13 +29,23 @@ const context = vm.createContext({ chrome, URL, navigator: { userAgent: 'Browser
   btoa: value => Buffer.from(value, 'binary').toString('base64'),
   fetch: async (url, options) => {
     if (offline) throw new TypeError('Failed to fetch');
-    if (url.includes('/hello?c=')) {
-      // PastDow signs the challenge with the pairing key; an impostor on the port cannot
-      const challenge = new URL(url).searchParams.get('c');
-      const proof = impostor ? 'f'.repeat(64) : nodeCrypto.createHmac('sha256', local.key).update('pastdow-hello:' + challenge).digest('hex');
-      return { ok: true, status: 200, json: async () => ({ proof }) };
-    }
-    sent.push({ url, options }); return { ok: !reject, status: reject ? 403 : 200 };
+    // what actually goes over the wire, for the "no key, no cookie in clear" checks
+    wire.push(options.body || '');
+    assert.equal(url, 'http://127.0.0.1:47821/msg');
+    assert.equal(JSON.stringify(Object.keys(options.headers)), '["Content-Type"]');
+    if (impostor) return { ok: true, status: 200, json: async () => ({ proof: 'f'.repeat(64) }) };
+    if (reject) return { ok: false, status: 403 };
+    // PastDow's side of the envelope (Sealed in BrowserLink.cs)
+    const derive = label => nodeCrypto.createHmac('sha256', local.key).update(label).digest();
+    const env = JSON.parse(options.body), macKey = derive('pastdow-mac');
+    const mac = nodeCrypto.createHmac('sha256', macKey).update(`pastdow-msg:${env.iv}:${env.ct}`).digest('hex');
+    assert.equal(mac, env.mac);
+    const decipher = nodeCrypto.createDecipheriv('aes-256-cbc', derive('pastdow-enc'), Buffer.from(env.iv, 'hex'));
+    const msg = JSON.parse(Buffer.concat([decipher.update(Buffer.from(env.ct, 'base64')), decipher.final()]).toString());
+    assert.ok(Math.abs(Date.now() - msg.ts) < 5000); assert.match(msg.nonce, /^[a-f0-9]{32}$/);
+    sent.push({ url: '/' + msg.op, options: { body: JSON.stringify(msg.media || {}) } });
+    const proof = nodeCrypto.createHmac('sha256', macKey).update('pastdow-ok:' + msg.nonce).digest('hex');
+    return { ok: true, status: 200, json: async () => ({ proof }) };
   } });
 const source = fs.readFileSync(path.join(root, 'extension/background.js'), 'utf8');
 // Assertions involving VM arrays compare values rather than cross-realm prototypes.
@@ -44,7 +54,11 @@ vm.runInContext(source, context);
 const classify = (url, type, length, range) => context.classify({ tabId: 1, url, statusCode: 200,
   responseHeaders: [{ name: 'Content-Type', value: type }, { name: 'Content-Length', value: String(length || 0) }, { name: 'Content-Range', value: range || '' }] });
 const message = body => new Promise(resolve => events.message(body, { id: 'test' }, resolve));
-const flush = async () => { await vm.runInContext('Promise.all([...chains.values()])', context); for (let i = 0; i < 10; i++) await new Promise(setImmediate); };
+const flush = async () => {
+  await vm.runInContext('Promise.all([...chains.values()])', context);
+  // pushes to PastDow are sealed with WebCrypto first: wait until none is in flight
+  for (let i = 0; i < 2000 && (i < 10 || vm.runInContext('pushes.size', context) > 0); i++) await new Promise(setImmediate);
+};
 const detect = (url, type, length, tabId = 1) => events.headers({ tabId, url, statusCode: 200, responseHeaders: [
   { name: 'Content-Type', value: type }, { name: 'Content-Length', value: String(length) }] });
 (async () => {
@@ -74,7 +88,8 @@ const detect = (url, type, length, tabId = 1) => events.headers({ tabId, url, st
   assert.match(session['tab:1'].media[0].url, /signature=new/);
   assert.equal(session['tab:1'].subtitles.length, 1);
   const found = JSON.parse(sent.filter(x => x.url.endsWith('/found')).at(-2).options.body);
-  assert.ok(sent.some(x => x.options.headers['X-PastDow-Key'] === local.key));
+  // neither the key nor any cookie is ever readable on the wire
+  assert.ok(wire.length > 0 && wire.every(b => !b.includes(local.key) && !b.includes('session=')));
   assert.ok(sent.some(x => JSON.parse(x.options.body || '{}').subtitles?.[0]?.cookie === 'session=subs.example'));
   assert.ok(found.userAgent);
   const id = session['tab:1'].media[0].id;
@@ -85,14 +100,15 @@ const detect = (url, type, length, tabId = 1) => events.headers({ tabId, url, st
   assert.equal(body.key, local.key); assert.equal(body.subtitles[0].lang, 'es');
   assert.equal(body.cookie, 'session=cdn.example');
   offline = false; impostor = true;
-  const before = sent.length;
+  const before = sent.length, wired = wire.length;
   // something else on the port: nothing is sent and the protocol fallback is not used either
   const squat = await message({ t: 'download', tabId: 1, id });
   assert.match(squat.error, /another program/); assert.equal(squat.protocol, undefined); assert.equal(sent.length, before);
+  assert.ok(wire.slice(wired).every(b => !b.includes('session=') && !b.includes(local.key)));
   impostor = false; reject = true;
   assert.match((await message({ t: 'download', tabId: 1, id })).error, /rejected/);
   events.navigate({ tabId: 1, frameId: 1 }); await flush(); assert.equal(session['tab:1'].media.length, 1);
   events.navigate({ tabId: 1, frameId: 0 }); await flush(); assert.equal(session['tab:1'], undefined);
   assert.equal(session['tab:2'].media.length, 1);
-  console.log('Extension: manifest, icons, JavaScript syntax, filters, sizes, subtitles, dedupe, per-tab state, headers, queue, fallback, server proof, auth rejection and navigation passed');
+  console.log('Extension: manifest, icons, JavaScript syntax, filters, sizes, subtitles, dedupe, per-tab state, headers, queue, fallback, sealed messages, server proof, auth rejection and navigation passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
