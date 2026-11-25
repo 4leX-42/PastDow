@@ -34,6 +34,8 @@
   <!-- One portable exe: the UI page and the WebView2 SDK files travel inside it (see Embedded.cs) -->
   <ItemGroup>
     <EmbeddedResource Include="ui\index.html" LogicalName="ui.html" />
+    <!-- the browser extension, unpacked by MENU > BROWSER EXTENSION (ExtensionSetup.cs) -->
+    <EmbeddedResource Include="extension\**\*" Exclude="extension\README.md" LogicalName="ext/%(RecursiveDir)%(Filename)%(Extension)" />
     <EmbeddedResource Include="$(PkgMicrosoft_Web_WebView2)\lib\net462\Microsoft.Web.WebView2.Core.dll" LogicalName="wv2.core.dll" />
     <EmbeddedResource Include="$(PkgMicrosoft_Web_WebView2)\lib\net462\Microsoft.Web.WebView2.WinForms.dll" LogicalName="wv2.winforms.dll" />
     <EmbeddedResource Include="$(PkgMicrosoft_Web_WebView2)\runtimes\win-x64\native\WebView2Loader.dll" LogicalName="wv2.loader.dll" />

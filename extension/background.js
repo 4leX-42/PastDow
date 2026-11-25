@@ -71,8 +71,21 @@ async function seal(key, message) {
   const ivHex = hex(iv);
   return { envelope: { iv: ivHex, ct, mac: hex(await hmac(macKey, `pastdow-msg:${ivHex}:${ct}`)) }, macKey };
 }
+// Installed from PastDow (MENU > BROWSER EXTENSION) the folder carries pairing.json with the key: pair by itself.
+// A key pasted in the popup is kept in storage and wins over the file.
+async function storedKey() {
+  let { key } = await chrome.storage.local.get('key');
+  if (key) return key;
+  try {
+    const r = await fetch(chrome.runtime.getURL('pairing.json'));
+    const file = r.ok ? await r.json() : null;
+    if (file && /^[a-f0-9]{64}$/.test(file.key)) { key = file.key; await chrome.storage.local.set({ key }); }
+  } catch { /* loaded by hand without PastDow's file: paste the key in the popup */ }
+  return key;
+}
+chrome.runtime.onInstalled?.addListener(() => { void storedKey(); });
 async function request(op, media) {
-  const { key } = await chrome.storage.local.get('key');
+  const key = await storedKey();
   if (!key) throw new Error('Paste your PastDow pairing key first');
   const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
   const { envelope, macKey } = await seal(key, { op, ts: Date.now(), nonce, ...(media ? { media } : {}) });
@@ -148,14 +161,14 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       const data = await state(message.tabId);
       for (const item of data.media) void push(item, data, message.tabId, generations.get(message.tabId) || 0);
       const tab = await chrome.tabs.get(message.tabId);
-      return { items: data.media, title: tab.title, subtitles: data.subtitles.length, paired: !!(await chrome.storage.local.get('key')).key };
+      return { items: data.media, title: tab.title, subtitles: data.subtitles.length, paired: !!(await storedKey()) };
     }
     if (message.t === 'download') {
       await chains.get(message.tabId);
       const data = await state(message.tabId), item = data.media.find(x => x.id === message.id);
       if (!item) throw new Error('This page changed, play the video again');
       const body = await payload(item, data, message.tabId);
-      const { key } = await chrome.storage.local.get('key');
+      const key = await storedKey();
       if (!key) throw new Error('Paste your PastDow pairing key first');
       try { await request('queue', body); return { ok: true }; }
       catch (error) {

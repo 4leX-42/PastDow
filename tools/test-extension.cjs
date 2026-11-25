@@ -9,7 +9,7 @@ for (const icon of Object.values(manifest.icons)) assert.equal(fs.readFileSync(p
 for (const file of ['background.js', 'popup.js']) new vm.Script(fs.readFileSync(path.join(root, 'extension', file), 'utf8'));
 new vm.Script(fs.readFileSync(path.join(root, 'ui/index.html'), 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1]);
 const session = {}, local = { key: 'a'.repeat(64) }, sent = [], wire = [], events = {};
-let offline = false, reject = false, impostor = false;
+let offline = false, reject = false, impostor = false, pairingFile = null;
 const nodeCrypto = require('node:crypto');
 const storage = data => ({
   get: async key => ({ [key]: data[key] }),
@@ -29,6 +29,7 @@ const context = vm.createContext({ chrome, URL, navigator: { userAgent: 'Browser
   btoa: value => Buffer.from(value, 'binary').toString('base64'),
   fetch: async (url, options) => {
     if (offline) throw new TypeError('Failed to fetch');
+    if (url.endsWith('/pairing.json')) return { ok: !!pairingFile, status: pairingFile ? 200 : 404, json: async () => pairingFile };
     // what actually goes over the wire, for the "no key, no cookie in clear" checks
     wire.push(options.body || '');
     assert.equal(url, 'http://127.0.0.1:47821/msg');
@@ -107,8 +108,15 @@ const detect = (url, type, length, tabId = 1) => events.headers({ tabId, url, st
   assert.ok(wire.slice(wired).every(b => !b.includes('session=') && !b.includes(local.key)));
   impostor = false; reject = true;
   assert.match((await message({ t: 'download', tabId: 1, id })).error, /rejected/);
+  // installed from PastDow: the folder's pairing.json pairs the extension by itself; a stored key wins
+  reject = false; delete local.key; chrome.runtime.getURL = file => 'chrome-extension://test/' + file;
+  pairingFile = { key: 'c'.repeat(64) };
+  assert.equal(await vm.runInContext('storedKey()', context), 'c'.repeat(64)); assert.equal(local.key, 'c'.repeat(64));
+  pairingFile = { key: 'd'.repeat(64) }; assert.equal(await vm.runInContext('storedKey()', context), 'c'.repeat(64));
+  delete local.key; pairingFile = { key: 'not-a-key' }; assert.equal(await vm.runInContext('storedKey()', context), undefined);
+  local.key = 'a'.repeat(64);
   events.navigate({ tabId: 1, frameId: 1 }); await flush(); assert.equal(session['tab:1'].media.length, 1);
   events.navigate({ tabId: 1, frameId: 0 }); await flush(); assert.equal(session['tab:1'], undefined);
   assert.equal(session['tab:2'].media.length, 1);
-  console.log('Extension: manifest, icons, JavaScript syntax, filters, sizes, subtitles, dedupe, per-tab state, headers, queue, fallback, sealed messages, server proof, auth rejection and navigation passed');
+  console.log('Extension: manifest, icons, JavaScript syntax, filters, sizes, subtitles, dedupe, per-tab state, headers, queue, fallback, sealed messages, server proof, auto-pairing, auth rejection and navigation passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
