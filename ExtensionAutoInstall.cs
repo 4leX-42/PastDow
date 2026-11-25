@@ -45,18 +45,19 @@ namespace PastDow
                 Key(0x0D);   // Enter
 
                 step("Turning on Developer mode");
-                var dev = Until(12000, () => ById(win, "devMode"));
-                if (dev == null || !(dev.TryGetCurrentPattern(TogglePattern.Pattern, out object tp))) return false;
-                var toggle = (TogglePattern)tp;
+                // Chrome puts id="devMode" on the toggle itself; Brave on a wrapper with the toggle inside
+                var toggle = Until(15000, () => Pattern<TogglePattern>(ById(win, "devMode"), TogglePattern.Pattern));
+                if (toggle == null) return false;
                 if (toggle.Current.ToggleState != ToggleState.On) toggle.Toggle();
 
                 step("Loading the extension");
-                var load = Until(6000, () => { var e = ById(win, "loadUnpacked"); return e != null && !e.Current.IsOffscreen ? e : null; });
-                if (load == null || !(load.TryGetCurrentPattern(InvokePattern.Pattern, out object ip))) return false;
+                // the button only appears once Developer mode is on
+                var invoke = Until(8000, () => { var e = ById(win, "loadUnpacked"); return e != null && !e.Current.IsOffscreen ? Pattern<InvokePattern>(e, InvokePattern.Pattern) : null; });
+                if (invoke == null) return false;
                 int[] pids = Process.GetProcessesByName(procName).Select(p => p.Id).ToArray();
                 var dialogsBefore = Dialogs(pids);
                 // Invoke blocks until the modal folder dialog closes in some browsers: press it from another thread
-                new Thread(() => { try { ((InvokePattern)ip).Invoke(); } catch { } }) { IsBackground = true }.Start();
+                new Thread(() => { try { invoke.Invoke(); } catch { } }) { IsBackground = true }.Start();
 
                 IntPtr dlg = Until(10000, () => Dialogs(Process.GetProcessesByName(procName).Select(p => p.Id).ToArray()).FirstOrDefault(d => !dialogsBefore.Contains(d)));
                 if (dlg == IntPtr.Zero) return false;
@@ -77,6 +78,16 @@ namespace PastDow
                 return listed != null;
             }
             catch { return false; }
+        }
+
+        /// <summary>The pattern on the element itself or, failing that, on its first descendant that has it.</summary>
+        static T Pattern<T>(AutomationElement e, AutomationPattern pattern) where T : BasePattern
+        {
+            if (e == null) return null;
+            if (e.TryGetCurrentPattern(pattern, out object p)) return (T)p;
+            foreach (AutomationElement child in e.FindAll(TreeScope.Descendants, Condition.TrueCondition))
+                if (child.TryGetCurrentPattern(pattern, out p)) return (T)p;
+            return null;
         }
 
         static AutomationElement ById(AutomationElement root, string id)
