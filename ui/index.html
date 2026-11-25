@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <title>PastDow</title>
 <style>
-  :root { --fg:#f3f3f1; --sub:#bdbdb9; --mute:#93938f; --dim:#6c6c68; --ease:cubic-bezier(.2,.8,.2,1); }
+  :root { --fg:#f7f7f5; --sub:#cfcfcb; --mute:#a6a6a2; --dim:#7a7a76; --ease:cubic-bezier(.2,.8,.2,1); }
   * { box-sizing:border-box; margin:0; padding:0; }
   html, body { background:#000; height:100%; overflow:hidden; }
-  body { color:var(--fg); font-family:"Segoe UI Variable Display","Segoe UI",sans-serif; font-weight:300;
-         -webkit-font-smoothing:antialiased; user-select:none; cursor:default; }
+  body { color:var(--fg); font-family:"Segoe UI Variable Display","Segoe UI",sans-serif; font-weight:400;
+         text-rendering:optimizeLegibility; user-select:none; cursor:default; }
   .stage { position:fixed; inset:0; display:grid; place-items:center; }
   .win { width:1120px; height:630px; position:relative; overflow:hidden; transform-origin:center; }
   .scene { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
@@ -16,6 +16,7 @@
   @keyframes breathe { 0%,100% { opacity:.7 } 50% { opacity:1 } }
   .intro { opacity:0; transform:translateY(10px); }
   body.live .intro { animation:in .9s var(--ease) forwards; }
+  body.settled .intro { animation:none; opacity:1; transform:none; }
   @keyframes in { to { opacity:1; transform:none } }
   button { all:unset; cursor:pointer; }
 
@@ -316,7 +317,11 @@
 <script>
 const $ = id => document.getElementById(id);
 const win = $('win');
-function fit() { win.style.transform = `scale(${Math.min(innerWidth / 1120, innerHeight / 630)})`; }
+function fit() {
+  const k = Math.min(innerWidth / 1120, innerHeight / 630);
+  // zoom instead of transform: text is laid out and rasterised at the final size, so it stays sharp
+  win.style.transform = ''; win.style.zoom = Math.abs(k - 1) < 0.01 ? '' : String(k);
+}
 addEventListener('resize', fit); fit();
 
 // small icons beside the row actions: OPEN = the file itself, FOLDER = where it lives
@@ -492,7 +497,7 @@ addEventListener('drop', e => {
 
 // ---- messages from the app ----
 function receive(m) {
-  if (m.t === 'reveal') document.body.classList.add('live');
+  if (m.t === 'reveal') { document.body.classList.add('live'); setTimeout(() => document.body.classList.add('settled'), 2600); }
   if (m.t === 'clip' && !url.value) { url.value = m.url; linkChanged(); url.focus(); url.select(); }
   if (m.t === 'state') {
     // the screen starts from the saved defaults once; later state updates only refresh the menu
@@ -526,6 +531,7 @@ function receive(m) {
   }
   if (m.t === 'jobs') renderJobs(m.jobs);
   if (m.t === 'found') renderFound(m.items);
+  if (m.t === 'done') toast('\u2713  ' + m.text);
   if (m.t === 'extStep') $('browserStatus').textContent = m.text + '…  hands off the browser for a moment';
   if (m.t === 'extOpened') {
     $('extButtons').querySelectorAll('button').forEach(b => b.disabled = false);

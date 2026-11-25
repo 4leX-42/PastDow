@@ -57,7 +57,7 @@ namespace PastDow
             web.DefaultBackgroundColor = Color.Black;
             Controls.Add(web);
 
-            Runner.Finished += j => { dirty = true; try { BeginInvoke((Action)(() => { if (!ToCapture(j)) { Pump(); PushState(); if (j.State == JobState.Failed && j.EngineSuspect) AutoFix(); } })); } catch { } };
+            Runner.Finished += j => { dirty = true; try { BeginInvoke((Action)(() => { if (!ToCapture(j)) { Count(j); Pump(); PushState(); if (j.State == JobState.Failed && j.EngineSuspect) AutoFix(); BatchDone(); } })); } catch { } };
             push.Tick += (s, e) => { if (dirty || jobs.Any(j => j.Active)) { dirty = false; PushJobs(); } };
             push.Start();
         }
@@ -503,6 +503,56 @@ namespace PastDow
             foreach (var u in (text ?? "").Split(new[] { '\r', '\n', ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries))
                 if (IsUrl(u.Trim())) { jobs.Add(new Job { Url = u.Trim(), Audio = audio, MaxHeight = q, Format = fmt }); lastClip = u.Trim(); }
             Pump();
+        }
+
+        // ---------- "done" notice: one small tick when a batch of downloads ends ----------
+        int doneVideos, doneAudio;
+        string lastDoneFile;
+
+        void Count(Job j)
+        {
+            if (j.State != JobState.Done) return;
+            if (j.Audio) doneAudio++; else doneVideos++;
+            lastDoneFile = j.File;
+        }
+
+        /// <summary>
+        /// When nothing is left running or queued: a tick in the window, and when PastDow is not in front a Windows
+        /// notification (click opens the folder) plus a taskbar flash.
+        /// </summary>
+        void BatchDone()
+        {
+            if (doneVideos + doneAudio == 0 || jobs.Any(x => x.Active || x.State == JobState.Queued) || PastDow.Capture.Busy) return;
+            string text = Plural(doneVideos, "video") + (doneVideos > 0 && doneAudio > 0 ? " and " : "") + Plural(doneAudio, "track") + " downloaded";
+            string file = lastDoneFile;
+            doneVideos = doneAudio = 0;
+            Post(new { t = "done", text = text.ToUpperInvariant() });
+            if (ContainsFocus && WindowState != FormWindowState.Minimized) return;
+            Flash();
+            try
+            {
+                // Windows already shows "PastDow" as the header: the title is the news, the body the last file
+                string body = file != null ? Path.GetFileName(file) : Settings.VideoDir;
+                var tray = new NotifyIcon { Icon = Icon, Text = AppName, Visible = true, BalloonTipTitle = "✓ " + char.ToUpper(text[0]) + text.Substring(1), BalloonTipText = body, BalloonTipIcon = ToolTipIcon.None };
+                tray.BalloonTipClicked += (o, e) => OpenFolder(file != null ? Path.GetDirectoryName(file) : Settings.VideoDir, file);
+                tray.ShowBalloonTip(6000);
+                var gone = new System.Windows.Forms.Timer { Interval = 12000 };
+                gone.Tick += (o, e) => { gone.Stop(); gone.Dispose(); tray.Visible = false; tray.Dispose(); };
+                gone.Start();
+            }
+            catch { }
+        }
+
+        static string Plural(int n, string word) => n == 0 ? "" : n == 1 ? "1 " + word : n + " " + word + "s";
+
+        [StructLayout(LayoutKind.Sequential)] struct FLASHWINFO { public uint cbSize; public IntPtr hwnd; public uint dwFlags, uCount, dwTimeout; }
+        [DllImport("user32.dll")] static extern bool FlashWindowEx(ref FLASHWINFO f);
+
+        void Flash()
+        {
+            // FLASHW_TRAY | FLASHW_TIMERNOFG: the taskbar button glows until the window comes to the front
+            var f = new FLASHWINFO { cbSize = (uint)Marshal.SizeOf(typeof(FLASHWINFO)), hwnd = Handle, dwFlags = 0x2 | 0xC, uCount = 3 };
+            try { FlashWindowEx(ref f); } catch { }
         }
 
         void Pump()
