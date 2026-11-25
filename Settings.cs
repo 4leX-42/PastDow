@@ -17,6 +17,12 @@ namespace PastDow
         public static string VideoDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "PastDow");
         public static string AudioDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyMusic), "PastDow");
         public static bool Audio;
+        /// <summary>
+        /// Pairing key for the browser extension. It lives in its own file, not in settings.ini: an older PastDow
+        /// still open rewrites settings.ini with the fields it knows, which would drop the key and unpair the browser.
+        /// </summary>
+        public static string BrowserKey;
+        static readonly string KeyFile = Path.Combine(Home, "browser-key.txt");
         public static int MaxHeight;          // 0 = no cap
         public static bool SkipDone = true;   // skip what was already downloaded (archive files)
         public static bool ChannelFolders;    // false = files go straight into the folder; true = one subfolder per channel
@@ -48,6 +54,7 @@ namespace PastDow
                 VideoDir = FollowRename(VideoDir, Environment.SpecialFolder.MyVideos);
                 AudioDir = FollowRename(AudioDir, Environment.SpecialFolder.MyMusic);
                 if (d.TryGetValue("audio", out v)) Audio = v == "1";
+                if (d.TryGetValue("browser_key", out v) && IsKey(v)) BrowserKey = v;   // builds before browser-key.txt
                 if (d.TryGetValue("max_height", out v)) int.TryParse(v, out MaxHeight);
                 if (d.TryGetValue("skip_done", out v)) SkipDone = v != "0";
                 if (d.TryGetValue("channel_folders", out v)) ChannelFolders = v == "1";
@@ -55,6 +62,7 @@ namespace PastDow
                 if (d.TryGetValue("audio_format", out v) && Array.IndexOf(AudioFormats, v) >= 0) AudioFormat = v;
             }
             catch { }
+            finally { LoadKey(); }
         }
 
         /// <summary>
@@ -72,6 +80,26 @@ namespace PastDow
                 return Directory.Exists(oldDefault) ? dir : newDefault;
             }
             catch { return dir; }
+        }
+
+        static bool IsKey(string v) => v != null && System.Text.RegularExpressions.Regex.IsMatch(v, "^[a-f0-9]{64}$");
+
+        static void LoadKey()
+        {
+            try
+            {
+                string saved = File.Exists(KeyFile) ? File.ReadAllText(KeyFile, Encoding.ASCII).Trim() : null;
+                if (IsKey(saved)) { BrowserKey = saved; return; }
+                if (BrowserKey == null)
+                {
+                    var bytes = new byte[32];
+                    using (var rng = System.Security.Cryptography.RandomNumberGenerator.Create()) rng.GetBytes(bytes);
+                    BrowserKey = BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant();
+                }
+                Directory.CreateDirectory(Home);
+                File.WriteAllText(KeyFile, BrowserKey, Encoding.ASCII);
+            }
+            catch { }
         }
 
         public static void Save()

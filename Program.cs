@@ -17,10 +17,10 @@ namespace PastDow
             Embedded.Hook();   // before any WebView2 type is touched
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Settings.Load();
 
             if (args.Contains("--uninstall"))
             {
+                Settings.Load();
                 using (var f = new SetupForm(SetupForm.Kind.Uninstall))
                 {
                     f.OnContinue = report => { Installer.Uninstall(); System.Threading.Thread.Sleep(400); return null; };
@@ -28,6 +28,9 @@ namespace PastDow
                 }
                 return;
             }
+
+            if (SingleInstance.Forward(args, 150)) return;
+            Settings.Load();
 
             // a copy installed by winget is already managed by winget: no install/portable question
             bool fromWinget = Installer.Self.IndexOf(@"\WinGet\", StringComparison.OrdinalIgnoreCase) >= 0;
@@ -62,6 +65,22 @@ namespace PastDow
 
         // separate method so Main is compiled before the WebView2 assemblies are needed
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
-        static void Run(string[] args) => Application.Run(new AppForm(args));
+        static void Run(string[] args)
+        {
+            using (var instance = new SingleInstance())
+            {
+                if (!instance.First)
+                {
+                    if (!SingleInstance.Forward(args, 15000)) MessageBox.Show("Could not contact the running PastDow", "PastDow");
+                    return;
+                }
+                Installer.RegisterProtocol(Installer.Self);
+                using (var app = new AppForm(args))
+                {
+                    app.Shown += (s, e) => instance.Listen(app.ReceiveArguments);
+                    Application.Run(app);
+                }
+            }
+        }
     }
 }

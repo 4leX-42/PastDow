@@ -18,6 +18,7 @@ Any video. Best quality. One click
 | <img src="https://api.iconify.design/lucide/upload.svg?color=%238b949e" width="18" align="top"> **Drop** | A .txt full of links onto the window; two downloads at a time |
 | <img src="https://api.iconify.design/lucide/sliders-horizontal.svg?color=%238b949e" width="18" align="top"> **Select** | Video up to 4K HDR in MKV, MP4 or WebM · audio at source quality, or MP3, M4A, FLAC, WAV, Opus |
 | <img src="https://api.iconify.design/lucide/download.svg?color=%238b949e" width="18" align="top"> **Download** | Chapters, subtitles and cover inside the file, straight into your folder |
+| <img src="https://api.iconify.design/lucide/monitor-play.svg?color=%238b949e" width="18" align="top"> **Browser** | Videos you are watching in Edge or Chrome, even behind a login (class recordings), with their subtitles · [extension](extension/README.md) |
 
 <p align="center"><sub>YouTube and 1,000+ other sites · install or run portable · no admin rights · fixes itself when a site changes</sub></p>
 
@@ -28,6 +29,8 @@ First launch fetches [yt-dlp](https://github.com/yt-dlp/yt-dlp), FFmpeg and Deno
 
 ```powershell
 dotnet build -c Release
+.\tools\test-browser.ps1 -Assembly bin\Release\net48\PastDow.exe   # browser capture, subtitles, single instance
+node tools\test-extension.cjs                                       # extension filters and messaging
 ```
 </details>
 

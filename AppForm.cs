@@ -29,6 +29,11 @@ namespace PastDow
         readonly WebView2 web = new WebView2();
         readonly JavaScriptSerializer json = new JavaScriptSerializer();
         readonly List<Job> jobs = new List<Job>();
+        readonly List<KeyValuePair<int, BrowserMedia>> found = new List<KeyValuePair<int, BrowserMedia>>();
+        readonly List<string> pendingArgs = new List<string>();
+        BrowserLink browser;
+        int nextFound;
+        string browserStatus = "";
         readonly System.Windows.Forms.Timer push = new System.Windows.Forms.Timer { Interval = 120 };
         readonly string[] startUrls;
         bool pageReady, engineReady, animating, dirty;
@@ -52,7 +57,7 @@ namespace PastDow
             web.DefaultBackgroundColor = Color.Black;
             Controls.Add(web);
 
-            Runner.Finished += j => { dirty = true; try { BeginInvoke((Action)(() => { Pump(); PushState(); if (j.State == JobState.Failed && j.EngineSuspect) AutoFix(); })); } catch { } };
+            Runner.Finished += j => { dirty = true; try { BeginInvoke((Action)(() => { if (!ToCapture(j)) { Pump(); PushState(); if (j.State == JobState.Failed && j.EngineSuspect) AutoFix(); } })); } catch { } };
             push.Tick += (s, e) => { if (dirty || jobs.Any(j => j.Active)) { dirty = false; PushJobs(); } };
             push.Start();
         }
@@ -101,6 +106,18 @@ namespace PastDow
         protected override async void OnShown(EventArgs e)
         {
             base.OnShown(e);
+            try
+            {
+                browser = new BrowserLink((media, queue) =>
+                {
+                    var completion = new TaskCompletionSource<bool>();
+                    try { BeginInvoke((Action)(() => { try { AddFound(media); if (queue) QueueFound(media, false, Settings.MaxHeight, Settings.VideoFormat); completion.SetResult(true); } catch (Exception ex) { completion.SetException(ex); } })); }
+                    catch (Exception ex) { completion.SetException(ex); }
+                    return completion.Task;
+                });
+                browser.Start();
+            }
+            catch (Exception ex) { browserStatus = "Browser connection unavailable: " + ex.Message; }
             Genie.LocateTarget(this);
             // WebView2 takes a moment (seconds on the very first run): show a small splash meanwhile,
             // unless the installer window is still covering the hand-over
@@ -212,8 +229,8 @@ namespace PastDow
             {
                 case "ready":
                     pageReady = true;
-                    PushState(); PushJobs();
-                    foreach (var u in startUrls.Where(a => !a.StartsWith("--"))) Add(u, false, Settings.MaxHeight, Settings.VideoFormat);
+                    PushState(); PushJobs(); PushFound();
+                    AcceptArguments(startUrls.Concat(pendingArgs).ToArray()); pendingArgs.Clear();
                     Reveal();
                     PrepareEngine();
                     break;
@@ -226,6 +243,14 @@ namespace PastDow
                         Add(S("url"), audio, audio ? 0 : I("q"), fmt);
                         break;
                     }
+                case "foundClear": found.Clear(); PushFound(); break;
+                case "foundQueue":
+                    {
+                        var media = found.FirstOrDefault(x => x.Key == I("id")).Value;
+                        if (media != null) QueueFound(media, S("mode") == "audio", I("q"), S("fmt"));
+                        break;
+                    }
+                case "browserKey": try { Clipboard.SetText(Settings.BrowserKey); lastClip = Settings.BrowserKey; } catch { } break;
                 case "def":
                     {
                         string k = S("key"), v = S("value");
@@ -247,7 +272,14 @@ namespace PastDow
                         var j = J();
                         if (j != null && j.Finished)
                         {
-                            jobs[jobs.IndexOf(j)] = new Job { Url = j.Url, Audio = j.Audio, MaxHeight = j.MaxHeight, Format = j.Format, Force = true, Title = j.Title };
+                            var fresh = j.Captured ? found.FirstOrDefault(x => x.Value.page == j.Page && new Uri(x.Value.url).GetLeftPart(UriPartial.Path) == new Uri(j.Url).GetLeftPart(UriPartial.Path)).Value : null;
+                            // External browser sessions cannot be replayed inside the capture window.
+                            var retry = fresh != null ? fresh.Job(j.Audio, j.MaxHeight, j.Format) : j.Captured
+                                ? new Job { Url = j.Url, Page = j.Page, Referer = j.Referer, UserAgent = j.UserAgent, Cookie = j.Cookie, Title = j.Title,
+                                    Captured = true, Subtitles = j.Subtitles, MediaKind = j.MediaKind, Audio = j.Audio, MaxHeight = j.MaxHeight, Format = j.Format }
+                                : new Job { Url = j.Url, Audio = j.Audio, MaxHeight = j.MaxHeight, Format = j.Format, Title = j.Title, ForceCapture = j.ForceCapture };
+                            retry.Force = true;
+                            jobs[jobs.IndexOf(j)] = retry;
                             Pump();
                         }
                         break;
@@ -284,8 +316,52 @@ namespace PastDow
                 t = "state",
                 q = Settings.MaxHeight, vfmt = Settings.VideoFormat, afmt = Settings.AudioFormat,
                 videoDir = Settings.VideoDir, audioDir = Settings.AudioDir, videoFree = Free(Settings.VideoDir), audioFree = Free(Settings.AudioDir), skip = Settings.SkipDone, channelFolders = Settings.ChannelFolders, update = updateNote,
-                engine = engineStatus, enginePct = enginePct, ready = engineReady, version = Installer.Version
+                engine = engineStatus, enginePct = enginePct, ready = engineReady, version = Installer.Version,
+                browserKey = Settings.BrowserKey, browserStatus
             });
+        }
+
+        void PushFound()
+        {
+            Post(new { t = "found", items = found.Select(x => new { id = x.Key, title = x.Value.title, kind = x.Value.kind, size = x.Value.size,
+                host = new Uri(x.Value.url).Host, subtitles = x.Value.subtitles.Count }).ToList() });
+        }
+
+        void AddFound(BrowserMedia media)
+        {
+            int index = found.FindIndex(x => x.Value.Identity == media.Identity);
+            int id = index >= 0 ? found[index].Key : ++nextFound;
+            if (index >= 0) { media.size = Math.Max(media.size, found[index].Value.size); found.RemoveAt(index); }
+            found.Insert(0, new KeyValuePair<int, BrowserMedia>(id, media));
+            if (found.Count > 200) found.RemoveAt(found.Count - 1);
+            PushFound();
+        }
+
+        void QueueFound(BrowserMedia media, bool audio, int q, string fmt)
+        {
+            if (audio ? !Settings.AudioFormats.Contains(fmt) : !Settings.VideoFormats.Contains(fmt)) fmt = audio ? Settings.AudioFormat : Settings.VideoFormat;
+            if (!new[] { 0, 720, 1080, 1440, 2160 }.Contains(q)) q = 0;
+            jobs.Add(media.Job(audio, audio ? 0 : q, fmt));
+            Pump();
+        }
+
+        /// <summary>Called by the per-user argument pipe, marshaled to the window thread.</summary>
+        public void ReceiveArguments(string[] args)
+        {
+            try { BeginInvoke((Action)(() => { if (!pageReady) pendingArgs.AddRange(args ?? new string[0]); else AcceptArguments(args); })); } catch { }
+        }
+
+        void AcceptArguments(string[] args)
+        {
+            foreach (var arg in args ?? new string[0])
+            {
+                if (arg.StartsWith("pastdow:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var media = BrowserMedia.Protocol(arg);
+                    if (media != null) { AddFound(media); QueueFound(media, false, Settings.MaxHeight, Settings.VideoFormat); }
+                }
+                else if (!arg.StartsWith("--")) Add(arg, false, Settings.MaxHeight, Settings.VideoFormat);
+            }
         }
 
         void PushJobs()
@@ -298,7 +374,7 @@ namespace PastDow
                     id = j.Id, audio = j.Audio, url = j.Url, title = j.Title ?? "", state = j.State.ToString().ToLowerInvariant(), started = j.Started,
                     pct = Math.Round(j.Percent, 1), speed = j.Speed ?? "", eta = j.Eta ?? "", error = j.Error ?? "",
                     kind = j.Audio ? (j.Format == null || j.Format == "best" ? "BEST AUDIO" : j.Format.ToUpperInvariant()) : (j.MaxHeight > 0 ? j.MaxHeight + "P" : "BEST") + " · " + (j.Format ?? "mkv").ToUpperInvariant(),
-                    size = SizeOf(j.File), file = j.File != null ? Path.GetFileName(j.File) : ""
+                    size = SizeOf(j.File), file = j.File != null ? Path.GetFileName(j.File) : "", subtitleNote = j.SubtitleNote
                 }).ToList()
             });
         }
@@ -367,7 +443,8 @@ namespace PastDow
                 updateNote = "Updated after a failed download";
                 engineStatus = "yt-dlp updated · retrying"; PushState();
                 foreach (var j in jobs.Where(x => x.State == JobState.Failed && x.EngineSuspect && !x.FixTried).ToList())
-                    jobs[jobs.IndexOf(j)] = new Job { Url = j.Url, Audio = j.Audio, MaxHeight = j.MaxHeight, Format = j.Format, Title = j.Title, FixTried = true };
+                    jobs[jobs.IndexOf(j)] = new Job { Url = j.Url, Audio = j.Audio, MaxHeight = j.MaxHeight, Format = j.Format, Title = j.Title, FixTried = true,
+                        Captured = j.Captured, Page = j.Page, Referer = j.Referer, Cookie = j.Cookie, UserAgent = j.UserAgent, MediaKind = j.MediaKind, Subtitles = j.Subtitles };
                 Pump();
             }
             else
@@ -405,13 +482,40 @@ namespace PastDow
                 foreach (var j in jobs.Where(j => j.State == JobState.Queued).ToList())
                 {
                     if (running >= Parallel) break;
-                    Runner.Start(j);
+                    if (j.NeedsCapture)
+                    {
+                        if (PastDow.Capture.Busy) continue;   // one capture window at a time; the rest wait their turn
+                        j.State = JobState.Running;
+                        j.Title = j.Title ?? "Find the video in the browser window";
+                        PastDow.Capture.Open(j, this, Captured);
+                    }
+                    else Runner.Start(j);
                     running++;
                 }
             }
             dirty = true;
             var act = jobs.Where(j => j.Active).ToList();
             Text = act.Count == 0 ? AppName : $"{AppName} · {act.Average(j => j.State == JobState.Processing ? 100 : j.Percent):0}%";
+        }
+
+        // ---------- capture window: pages yt-dlp cannot read ----------
+        /// <summary>yt-dlp said the page is not supported: look for the video in the capture window instead.</summary>
+        bool ToCapture(Job j)
+        {
+            if (j.State != JobState.Failed || !j.Unsupported || j.Captured || j.ForceCapture || !jobs.Contains(j)) return false;
+            jobs[jobs.IndexOf(j)] = new Job { Url = j.Url, Audio = j.Audio, MaxHeight = j.MaxHeight, Format = j.Format, Force = j.Force, ForceCapture = true };
+            Pump(); PushState();
+            return true;
+        }
+
+        void Captured(Job j)
+        {
+            if (IsDisposed) return;
+            if (j.CancelRequested) { j.State = JobState.Canceled; j.Started = false; }
+            else { j.Captured = true; j.State = JobState.Queued; }
+            dirty = true;
+            Pump();
+            Activate();
         }
 
         protected override void OnActivated(EventArgs e)
@@ -448,6 +552,7 @@ namespace PastDow
         {
             // anything half-done resumes next time (--continue)
             setupCts?.Cancel();
+            browser?.Dispose();
             foreach (var j in jobs.Where(j => j.Active).ToList()) Runner.Cancel(j);
             Settings.Save();
             base.OnFormClosing(e);
