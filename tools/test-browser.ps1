@@ -130,13 +130,17 @@ public static class BrowserChecks
             Check(Request(listener, receiver, port, "POST", "/msg", queueMsg) == 200 && received == 2 && queued == 1, "queue");
             Check(Request(listener, receiver, port, "POST", "/msg", queueMsg) == 403 && queued == 1, "replayed message rejected");
             Check(Request(listener, receiver, port, "POST", "/msg", Seal(key, "queue", body, Now() - 600000, Nonce())) == 403 && queued == 1, "stale message rejected");
+            // sealed before this PastDow started (a capture replayed after a restart): refused even inside the window
+            T("Sealed").GetField("Since", Flags).SetValue(null, Now());
+            Check(Request(listener, receiver, port, "POST", "/msg", Seal(key, "queue", body, Now() - 60000, Nonce())) == 403 && queued == 1, "message from before a restart rejected");
+            T("Sealed").GetField("Since", Flags).SetValue(null, 0L);
             string tampered = Seal(key, "queue", body, Now(), Nonce()); tampered = tampered.Replace("\"ct\":\"", "\"ct\":\"A");
             Check(Request(listener, receiver, port, "POST", "/msg", tampered) == 403 && queued == 1, "tampered ciphertext rejected");
             Check(Request(listener, receiver, port, "POST", "/msg", Seal(key, "queue", Body("file:///bad", "https://subs.example/a.vtt"), Now(), Nonce())) == 400 && queued == 1, "endpoint validates URLs");
             Check(Request(listener, receiver, port, "POST", "/msg", "malformed") == 400, "malformed JSON");
         }
         ((IDisposable)receiver).Dispose();
-        Console.WriteLine("Browser: validation, header injection, job conversion, direct info JSON, subtitle headers, arguments, protocol auth, sidecar preservation and sealed HTTP endpoint (wrong key, replay, stale, tamper) passed");
+        Console.WriteLine("Browser: validation, header injection, job conversion, direct info JSON, subtitle headers, arguments, protocol auth, sidecar preservation and sealed HTTP endpoint (wrong key, replay, stale, pre-restart, tamper) passed");
         Type instanceType = T("SingleInstance");
         instanceType.GetField("Name", Flags).SetValue(null, "PastDow.Test." + Guid.NewGuid().ToString("N"));
         object first = Activator.CreateInstance(instanceType);

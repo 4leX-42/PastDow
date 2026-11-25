@@ -81,6 +81,7 @@ namespace PastDow
         public void Start()
         {
             listener.Prefixes.Add("http://127.0.0.1:" + Port + "/");
+            Sealed.Since = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             listener.Start();
             _ = Listen();
         }
@@ -194,12 +195,16 @@ namespace PastDow
 
         static readonly Dictionary<string, long> seen = new Dictionary<string, long>();
 
+        /// <summary>When this PastDow started listening: the seen-nonce list is in memory, so anything sealed before
+        /// a restart is refused instead of being replayable inside the two-minute window.</summary>
+        public static long Since;
+
         /// <summary>Within two minutes of now and never seen before: a captured request cannot be replayed.</summary>
         public static bool Fresh(long ts, string nonce)
         {
             if (nonce == null || !Regex.IsMatch(nonce, "^[a-f0-9]{32}$")) return false;
             long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            if (Math.Abs(now - ts) > 120000) return false;
+            if (Math.Abs(now - ts) > 120000 || ts < Since) return false;
             lock (seen)
             {
                 foreach (var old in seen.Where(x => now - x.Value > 300000).Select(x => x.Key).ToList()) seen.Remove(old);
