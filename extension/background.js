@@ -53,25 +53,35 @@ async function payload(item, data, tabId) {
     subtitles: await Promise.all(data.subtitles.map(async s => ({ url: s.url, lang: s.lang, ext: s.ext, cookie: await cookie(s.url, tabId) }))) };
 }
 const hex = bytes => Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, '0')).join('');
-// Before the key or any cookie leaves the browser, PastDow must sign a fresh challenge with the pairing key.
-// Another program squatting the port while PastDow is closed cannot, so it never receives anything.
-async function verify(key) {
-  const challenge = hex(crypto.getRandomValues(new Uint8Array(32)));
-  const response = await fetch(`${ENDPOINT}/hello?c=${challenge}`, { signal: AbortSignal.timeout(2500) });
-  if (!response.ok) throw new Error(`PastDow returned ${response.status}`);
-  const { proof } = await response.json();
-  const mac = await crypto.subtle.importKey('raw', new TextEncoder().encode(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const expected = hex(await crypto.subtle.sign('HMAC', mac, new TextEncoder().encode('pastdow-hello:' + challenge)));
-  if (proof !== expected) throw new Error('Pairing key rejected, or another program answers on PastDow\'s port; copy the key again from PastDow');
+const utf8 = text => new TextEncoder().encode(text);
+const b64 = bytes => btoa(Array.from(new Uint8Array(bytes), b => String.fromCharCode(b)).join(''));
+async function hmac(keyBytes, text) {
+  const k = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return new Uint8Array(await crypto.subtle.sign('HMAC', k, utf8(text)));
 }
-async function request(path, data) {
+// The pairing key never leaves the browser. Every message to PastDow is sealed with keys derived from it
+// (AES-256-CBC, then HMAC-SHA256 over iv and ciphertext; same scheme as Sealed in BrowserLink.cs), carries a
+// one-time nonce and a timestamp, and PastDow's answer must sign that nonce. Anything else that receives the
+// request, a program on the port or a more specific http.sys prefix, sees only ciphertext and cannot answer.
+async function seal(key, message) {
+  const encKey = await hmac(utf8(key), 'pastdow-enc'), macKey = await hmac(utf8(key), 'pastdow-mac');
+  const iv = crypto.getRandomValues(new Uint8Array(16));
+  const aes = await crypto.subtle.importKey('raw', encKey, { name: 'AES-CBC' }, false, ['encrypt']);
+  const ct = b64(await crypto.subtle.encrypt({ name: 'AES-CBC', iv }, aes, utf8(JSON.stringify(message))));
+  const ivHex = hex(iv);
+  return { envelope: { iv: ivHex, ct, mac: hex(await hmac(macKey, `pastdow-msg:${ivHex}:${ct}`)) }, macKey };
+}
+async function request(op, media) {
   const { key } = await chrome.storage.local.get('key');
   if (!key) throw new Error('Paste your PastDow pairing key first');
-  await verify(key);
-  const response = await fetch(ENDPOINT + path, { method: data ? 'POST' : 'GET',
-    headers: { 'X-PastDow-Key': key, ...(data ? { 'Content-Type': 'application/json' } : {}) },
-    ...(data ? { body: JSON.stringify(data) } : {}), signal: AbortSignal.timeout(2500) });
+  const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
+  const { envelope, macKey } = await seal(key, { op, ts: Date.now(), nonce, ...(media ? { media } : {}) });
+  const response = await fetch(ENDPOINT + '/msg', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(envelope), signal: AbortSignal.timeout(2500) });
   if (!response.ok) throw new Error(response.status === 403 ? 'Pairing key rejected, copy it again from PastDow' : `PastDow returned ${response.status}`);
+  const { proof } = await response.json().catch(() => ({}));
+  if (proof !== hex(await hmac(macKey, 'pastdow-ok:' + nonce)))
+    throw new Error('Pairing key rejected, or another program answers on PastDow\'s port; copy the key again from PastDow');
   return true;
 }
 async function push(item, data, tabId, generation) {
@@ -85,7 +95,7 @@ async function push(item, data, tabId, generation) {
       if ((generations.get(tabId) || 0) !== latest.generation) continue;
       try {
         const body = await payload(latest.item, latest.data, tabId);
-        if ((generations.get(tabId) || 0) === latest.generation) await request('/found', body);
+        if ((generations.get(tabId) || 0) === latest.generation) await request('found', body);
       } catch { /* The popup can resend detections when PastDow is opened later. */ }
     }
   } finally { pushes.delete(id); }
@@ -130,7 +140,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       const key = String(message.key || '').trim();
       if (!/^[a-f0-9]{64}$/.test(key)) throw new Error('Paste the full key copied from PastDow');
       await chrome.storage.local.set({ key });
-      await request('/ping');
+      await request('ping');
       return { ok: true };
     }
     if (message.t === 'list') {
@@ -147,7 +157,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       const body = await payload(item, data, message.tabId);
       const { key } = await chrome.storage.local.get('key');
       if (!key) throw new Error('Paste your PastDow pairing key first');
-      try { await request('/queue', body); return { ok: true }; }
+      try { await request('queue', body); return { ok: true }; }
       catch (error) {
         // Only connection failures use the protocol; rejected requests need repairing the pairing.
         if (error.message.includes('rejected') || error.message.includes('returned')) throw error;

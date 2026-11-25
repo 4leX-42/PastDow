@@ -37,19 +37,39 @@ public static class BrowserChecks
         return new JavaScriptSerializer().Serialize(new { url = url, page = "https://page.example/recording", title = "Recording", kind = "MP4", size = 900000,
             userAgent = "Test agent", cookie = "media=value", subtitles = new[] { new { url = subtitle, lang = "und", cookie = "sub=value", ext = "vtt" } } });
     }
-    static int Request(HttpListener listener, object receiver, int port, string method, string path, string key, string body)
+    static string lastReply;
+    static string Hex(byte[] b) { return BitConverter.ToString(b).Replace("-", "").ToLowerInvariant(); }
+    static byte[] Hmac(byte[] key, string text) { using (var h = new System.Security.Cryptography.HMACSHA256(key)) return h.ComputeHash(Encoding.ASCII.GetBytes(text)); }
+    // the extension's side of the envelope (extension/background.js seal)
+    static string Seal(string key, string op, string media, long ts, string nonce)
+    {
+        byte[] k = Encoding.ASCII.GetBytes(key), enc = Hmac(k, "pastdow-enc"), mac = Hmac(k, "pastdow-mac");
+        string plain = "{\"op\":\"" + op + "\",\"ts\":" + ts + ",\"nonce\":\"" + nonce + "\"" + (media != null ? ",\"media\":" + media : "") + "}";
+        using (var aes = System.Security.Cryptography.Aes.Create())
+        {
+            aes.Key = enc; aes.GenerateIV(); aes.Mode = System.Security.Cryptography.CipherMode.CBC;
+            byte[] data = Encoding.UTF8.GetBytes(plain);
+            string ct; using (var e = aes.CreateEncryptor()) ct = Convert.ToBase64String(e.TransformFinalBlock(data, 0, data.Length));
+            string iv = Hex(aes.IV);
+            return "{\"iv\":\"" + iv + "\",\"ct\":\"" + ct + "\",\"mac\":\"" + Hex(Hmac(mac, "pastdow-msg:" + iv + ":" + ct)) + "\"}";
+        }
+    }
+    static string Proof(string key, string nonce) { return Hex(Hmac(Hmac(Encoding.ASCII.GetBytes(key), "pastdow-mac"), "pastdow-ok:" + nonce)); }
+    static long Now() { return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); }
+    static string Nonce() { return Guid.NewGuid().ToString("N"); }
+    static int Request(HttpListener listener, object receiver, int port, string method, string path, string body)
     {
         Task handling = Task.Run(async delegate { var context = await listener.GetContextAsync(); await (Task)Call(T("BrowserLink"), receiver, "Handle", context); });
         var req = (HttpWebRequest)WebRequest.Create("http://127.0.0.1:" + port + path);
         req.Method = method; req.Proxy = null; req.Timeout = 5000;
-        if (key != null) req.Headers["X-PastDow-Key"] = key;
+        lastReply = null;
         if (body != null)
         {
             byte[] bytes = Encoding.UTF8.GetBytes(body); req.ContentLength = bytes.Length; req.ContentType = "application/json";
             using (var stream = req.GetRequestStream()) stream.Write(bytes, 0, bytes.Length);
         }
         int status;
-        try { using (var response = (HttpWebResponse)req.GetResponse()) status = (int)response.StatusCode; }
+        try { using (var response = (HttpWebResponse)req.GetResponse()) { status = (int)response.StatusCode; using (var r = new StreamReader(response.GetResponseStream())) lastReply = r.ReadToEnd(); } }
         catch (WebException ex) { using (var response = (HttpWebResponse)ex.Response) status = (int)response.StatusCode; }
         handling.GetAwaiter().GetResult();
         return status;
@@ -100,18 +120,23 @@ public static class BrowserChecks
         using (var listener = new HttpListener())
         {
             listener.Prefixes.Add("http://127.0.0.1:" + port + "/"); listener.Start();
-            Check(Request(listener, receiver, port, "GET", "/ping", null, null) == 403, "reject missing key");
-            Check(Request(listener, receiver, port, "GET", "/ping", "bad", null) == 403, "reject wrong key");
-            string key = new string('a', 64);
-            Check(Request(listener, receiver, port, "GET", "/ping", key, null) == 200, "authenticated ping");
-            Check(Request(listener, receiver, port, "POST", "/found", key, body) == 200 && received == 1 && queued == 0, "found without queue");
-            Check(Request(listener, receiver, port, "POST", "/queue", key, body) == 200 && received == 2 && queued == 1, "queue");
-            Check(Request(listener, receiver, port, "POST", "/queue", key, Body("file:///bad", "https://subs.example/a.vtt")) == 400 && queued == 1, "endpoint validates URLs");
-            Check(Request(listener, receiver, port, "POST", "/found", key, "malformed") == 400, "malformed JSON");
-            Check(Request(listener, receiver, port, "GET", "/found", key, null) == 404, "wrong method");
+            string key = new string('a', 64), n;
+            Check(Request(listener, receiver, port, "POST", "/msg", Seal(new string('b', 64), "ping", null, Now(), Nonce())) == 403, "reject wrong key");
+            Check(Request(listener, receiver, port, "GET", "/msg", null) == 404 && Request(listener, receiver, port, "POST", "/queue", body) == 404, "only sealed POST /msg");
+            n = Nonce();
+            Check(Request(listener, receiver, port, "POST", "/msg", Seal(key, "ping", null, Now(), n)) == 200 && lastReply.Contains(Proof(key, n)), "sealed ping answered with nonce proof");
+            Check(Request(listener, receiver, port, "POST", "/msg", Seal(key, "found", body, Now(), Nonce())) == 200 && received == 1 && queued == 0, "found without queue");
+            string queueMsg = Seal(key, "queue", body, Now(), Nonce());
+            Check(Request(listener, receiver, port, "POST", "/msg", queueMsg) == 200 && received == 2 && queued == 1, "queue");
+            Check(Request(listener, receiver, port, "POST", "/msg", queueMsg) == 403 && queued == 1, "replayed message rejected");
+            Check(Request(listener, receiver, port, "POST", "/msg", Seal(key, "queue", body, Now() - 600000, Nonce())) == 403 && queued == 1, "stale message rejected");
+            string tampered = Seal(key, "queue", body, Now(), Nonce()); tampered = tampered.Replace("\"ct\":\"", "\"ct\":\"A");
+            Check(Request(listener, receiver, port, "POST", "/msg", tampered) == 403 && queued == 1, "tampered ciphertext rejected");
+            Check(Request(listener, receiver, port, "POST", "/msg", Seal(key, "queue", Body("file:///bad", "https://subs.example/a.vtt"), Now(), Nonce())) == 400 && queued == 1, "endpoint validates URLs");
+            Check(Request(listener, receiver, port, "POST", "/msg", "malformed") == 400, "malformed JSON");
         }
         ((IDisposable)receiver).Dispose();
-        Console.WriteLine("Browser: validation, header injection, job conversion, direct info JSON, subtitle headers, arguments, protocol auth, sidecar preservation and isolated HTTP endpoint passed");
+        Console.WriteLine("Browser: validation, header injection, job conversion, direct info JSON, subtitle headers, arguments, protocol auth, sidecar preservation and sealed HTTP endpoint (wrong key, replay, stale, tamper) passed");
         Type instanceType = T("SingleInstance");
         instanceType.GetField("Name", Flags).SetValue(null, "PastDow.Test." + Guid.NewGuid().ToString("N"));
         object first = Activator.CreateInstance(instanceType);
