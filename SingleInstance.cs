@@ -1,8 +1,11 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using Microsoft.Win32.SafeHandles;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
@@ -28,11 +31,35 @@ namespace PastDow
                 using (var pipe = new NamedPipeClientStream(".", Name, PipeDirection.Out))
                 {
                     pipe.Connect(timeout);
+                    // pastdow: links carry cookies and the pairing key: only hand them to a server run by this same
+                    // user, never to a process of another account that created the pipe name first
+                    if (!OwnedByMe(pipe)) return false;
                     using (var writer = new StreamWriter(pipe)) writer.WriteLine(new JavaScriptSerializer().Serialize(args));
                 }
                 return true;
             }
             catch { return false; }
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetNamedPipeServerProcessId(SafePipeHandle pipe, out uint pid);
+        [DllImport("advapi32.dll", SetLastError = true)] static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+        [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+
+        /// <summary>The process at the other end of the pipe runs under the current user's account.</summary>
+        static bool OwnedByMe(NamedPipeClientStream pipe)
+        {
+            IntPtr token = IntPtr.Zero;
+            try
+            {
+                if (!GetNamedPipeServerProcessId(pipe.SafePipeHandle, out uint pid)) return false;
+                using (var p = Process.GetProcessById((int)pid))
+                {
+                    if (!OpenProcessToken(p.Handle, 0x0008 /* TOKEN_QUERY */, out token)) return false;
+                    using (var id = new WindowsIdentity(token)) return id.User != null && id.User.Equals(User);
+                }
+            }
+            catch { return false; }   // another account's process cannot even be opened: not ours
+            finally { if (token != IntPtr.Zero) CloseHandle(token); }
         }
 
         public void Listen(Action<string[]> receive)

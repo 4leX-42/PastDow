@@ -102,6 +102,16 @@ namespace PastDow
             try
             {
                 res.ContentType = "application/json";
+                // the extension proves it reached PastDow before it sends the key or any cookie: anything else
+                // listening on this port (with PastDow closed) cannot answer, because it does not know the key
+                if (req.HttpMethod == "GET" && req.Url.AbsolutePath == "/hello" && req.RemoteEndPoint != null && IPAddress.IsLoopback(req.RemoteEndPoint.Address))
+                {
+                    string challenge = req.QueryString["c"] ?? "";
+                    if (string.IsNullOrEmpty(Settings.BrowserKey) || !Regex.IsMatch(challenge, "^[a-f0-9]{32,128}$")) { res.StatusCode = 400; return; }
+                    byte[] hello = Encoding.UTF8.GetBytes("{\"proof\":\"" + Proof(challenge) + "\"}");
+                    await res.OutputStream.WriteAsync(hello, 0, hello.Length).ConfigureAwait(false);
+                    return;
+                }
                 if (req.RemoteEndPoint == null || !IPAddress.IsLoopback(req.RemoteEndPoint.Address) || req.Url.Host != "127.0.0.1" ||
                     string.IsNullOrEmpty(Settings.BrowserKey) || req.Headers["X-PastDow-Key"] != Settings.BrowserKey) { res.StatusCode = 403; return; }
                 if (req.HttpMethod == "GET" && req.Url.AbsolutePath == "/ping") { res.StatusCode = 200; }
@@ -130,6 +140,13 @@ namespace PastDow
             }
             catch { try { res.StatusCode = 400; } catch { } }
             finally { try { res.Close(); } catch { } }
+        }
+
+        /// <summary>HMAC-SHA256 of "pastdow-hello:" + challenge, keyed with the pairing key (hex, lower case).</summary>
+        public static string Proof(string challenge)
+        {
+            using (var h = new System.Security.Cryptography.HMACSHA256(Encoding.ASCII.GetBytes(Settings.BrowserKey)))
+                return BitConverter.ToString(h.ComputeHash(Encoding.ASCII.GetBytes("pastdow-hello:" + challenge))).Replace("-", "").ToLowerInvariant();
         }
 
         public void Dispose() { listener.Close(); }

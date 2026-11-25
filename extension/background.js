@@ -52,9 +52,22 @@ async function payload(item, data, tabId) {
     userAgent: navigator.userAgent, cookie: await cookie(item.url, tabId),
     subtitles: await Promise.all(data.subtitles.map(async s => ({ url: s.url, lang: s.lang, ext: s.ext, cookie: await cookie(s.url, tabId) }))) };
 }
+const hex = bytes => Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, '0')).join('');
+// Before the key or any cookie leaves the browser, PastDow must sign a fresh challenge with the pairing key.
+// Another program squatting the port while PastDow is closed cannot, so it never receives anything.
+async function verify(key) {
+  const challenge = hex(crypto.getRandomValues(new Uint8Array(32)));
+  const response = await fetch(`${ENDPOINT}/hello?c=${challenge}`, { signal: AbortSignal.timeout(2500) });
+  if (!response.ok) throw new Error(`PastDow returned ${response.status}`);
+  const { proof } = await response.json();
+  const mac = await crypto.subtle.importKey('raw', new TextEncoder().encode(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const expected = hex(await crypto.subtle.sign('HMAC', mac, new TextEncoder().encode('pastdow-hello:' + challenge)));
+  if (proof !== expected) throw new Error('Pairing key rejected, or another program answers on PastDow\'s port; copy the key again from PastDow');
+}
 async function request(path, data) {
   const { key } = await chrome.storage.local.get('key');
   if (!key) throw new Error('Paste your PastDow pairing key first');
+  await verify(key);
   const response = await fetch(ENDPOINT + path, { method: data ? 'POST' : 'GET',
     headers: { 'X-PastDow-Key': key, ...(data ? { 'Content-Type': 'application/json' } : {}) },
     ...(data ? { body: JSON.stringify(data) } : {}), signal: AbortSignal.timeout(2500) });
