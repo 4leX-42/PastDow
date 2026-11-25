@@ -18,22 +18,39 @@ function detail(item, subtitles) {
   return [item.kind, size, new URL(item.url).host, subs].filter(Boolean).join(' · ');
 }
 
-async function refresh() {
-  const result = await message({ t: 'list', tabId });
+function durationLabel(seconds) {
+  const s = Math.floor(seconds || 0);
+  return s >= 3600 ? `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+async function refresh(capture = true) {
+  const result = await message({ t: 'list', tabId, refresh: capture });
   paired(result.paired);
   $('items').replaceChildren();
   if (!result.items.length) {
     const empty = document.createElement('div'); empty.id = 'empty';
-    empty.textContent = 'Nothing found in this tab yet. Press play; if the video was already playing, reload the tab.';
+    empty.textContent = 'Press play to find videos in this tab.';
     $('items').append(empty);
     return;
   }
   for (const item of result.items) {
     const row = document.createElement('article'), text = document.createElement('div');
     const title = document.createElement('b'), small = document.createElement('small'), button = document.createElement('button');
+    text.className = 'info';
+    const preview = document.createElement('div'); preview.className = 'preview'; preview.textContent = '\u25b6';
+    if (item.thumb) {
+      const image = document.createElement('img'); image.src = item.thumb; image.alt = '';
+      image.onerror = () => image.remove(); preview.append(image);
+    }
+    if (item.duration > 0) {
+      const badge = document.createElement('span'); badge.className = 'duration'; badge.textContent = durationLabel(item.duration); preview.append(badge);
+    }
+    if (result.subtitles) {
+      const subs = document.createElement('span'); subs.className = 'subtitles'; subs.textContent = 'CC'; subs.title = 'Subtitles available'; preview.append(subs);
+    }
+    const kind = document.createElement('span'); kind.className = 'kind'; kind.textContent = item.kind;
     title.textContent = result.title || new URL(item.url).pathname.split('/').pop() || 'Video';
     title.title = title.textContent;
-    small.textContent = detail(item, result.subtitles);
+    small.textContent = detail(item, 0).split(' · ').slice(1).join(' · ');
     button.textContent = 'DOWNLOAD';
     button.onclick = async () => {
       button.disabled = true;
@@ -47,7 +64,7 @@ async function refresh() {
         } else { $('status').textContent = 'Added to PastDow'; button.textContent = 'ADDED'; }
       } catch (error) { $('status').textContent = error.message; button.disabled = false; }
     };
-    text.append(title, small); row.append(text, button); $('items').append(row);
+    text.append(kind, title, small, button); row.append(preview, text); $('items').append(row);
   }
 }
 
@@ -65,5 +82,5 @@ $('repair').onclick = () => { paired(false); $('repair').hidden = true; $('key')
 })().catch(error => { $('status').textContent = error.message; });
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'session' && changes[`tab:${tabId}`]) void refresh().catch(() => {});
+  if (area === 'session' && changes[`tab:${tabId}`]) void refresh(false).catch(() => {});
 });

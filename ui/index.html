@@ -193,7 +193,12 @@
   .browser-head { display:flex; justify-content:space-between; font-size:10.5px; letter-spacing:.2em; color:var(--mute); height:25px; }
   .browser-items { overflow-x:hidden; overflow-y:auto; max-height:131px; padding-right:6px; }
   .browser-items::-webkit-scrollbar { width:2px; } .browser-items::-webkit-scrollbar-thumb { background:#333; }
-  .browser-item { display:block; position:relative; box-sizing:border-box; width:100%; text-align:left; border-top:1px solid #222; padding:10px 110px 10px 0; }
+  .browser-item { display:flex; align-items:center; gap:12px; position:relative; box-sizing:border-box; width:100%; text-align:left; border-top:1px solid #222; padding:10px 110px 10px 0; }
+  .browser-copy { min-width:0; flex:1; }
+  .browser-thumb { position:relative; flex:0 0 72px; width:72px; height:40px; border-radius:4px; overflow:hidden; background:#161616; display:grid; place-items:center; color:#666; }
+  .browser-thumb img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  .browser-duration { position:absolute; left:2px; bottom:2px; background:rgba(0,0,0,.78); color:#fff; font-size:9px; line-height:12px; padding:0 3px; border-radius:2px; }
+  .browser-copy .sub { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .browser-item .ttl { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .browser-item::after { content:'DOWNLOAD \2192'; position:absolute; right:0; top:50%; transform:translate(-6px,-50%); opacity:0;
     font-size:10.5px; letter-spacing:.2em; color:var(--fg); transition:opacity .18s, transform .18s; }
@@ -436,7 +441,15 @@ function renderFound(items) {
     const title = document.createElement('div'), sub = document.createElement('div'); title.className = 'ttl'; sub.className = 'sub';
     title.textContent = item.title || 'Browser video';
     sub.textContent = [item.kind, item.size ? (item.size / 1048576).toFixed(1) + ' MB' : 'SIZE UNKNOWN', item.host, item.subtitles ? item.subtitles + (item.subtitles === 1 ? ' SUBTITLE' : ' SUBTITLES') : ''].filter(Boolean).join(' · ');
-    row.append(title, sub); row.onclick = () => {
+    const preview = document.createElement('div'); preview.className = 'browser-thumb'; preview.textContent = '\u25b6';
+    if (item.thumb) { const image = document.createElement('img'); image.src = item.thumb; image.alt = ''; image.onerror = () => image.remove(); preview.append(image); }
+    if (item.duration > 0) {
+      const badge = document.createElement('span'); badge.className = 'browser-duration';
+      const seconds = Math.floor(item.duration), minutes = Math.floor(seconds / 60);
+      badge.textContent = (seconds >= 3600 ? Math.floor(seconds / 3600) + ':' + String(minutes % 60).padStart(2, '0') : minutes) + ':' + String(seconds % 60).padStart(2, '0'); preview.append(badge);
+    }
+    const copy = document.createElement('div'); copy.className = 'browser-copy'; copy.append(title, sub);
+    row.append(preview, copy); row.onclick = () => {
       send({ t: 'foundQueue', id: item.id, mode: st.mode, q: st.q, fmt: st.mode === 'audio' ? st.afmt : st.vfmt }); toast('BROWSER VIDEO ADDED');
     };
     $('foundItems').append(row);

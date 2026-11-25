@@ -24,6 +24,8 @@ namespace PastDow
         public string url { get; set; }
         public string kind { get; set; }
         public long size { get; set; }
+        public string thumb { get; set; }
+        public double duration { get; set; }
         public string page { get; set; }
         public string title { get; set; }
         public string userAgent { get; set; }
@@ -35,10 +37,16 @@ namespace PastDow
         public static bool Http(string value) => Uri.TryCreate(value, UriKind.Absolute, out var u) && (u.Scheme == "http" || u.Scheme == "https") && string.IsNullOrEmpty(u.UserInfo);
         static bool Header(string value) => value == null || (value.Length <= 65536 && !value.Any(c => c < 32 || c == 127));
 
-        public bool Valid() => Http(url) && Http(page) && Header(userAgent) && Header(cookie) &&
+        public bool Valid()
+        {
+            if (thumb != null && (thumb.Length > 120000 || !Regex.IsMatch(thumb,
+                @"\Adata:image/(?:jpeg|png);base64,(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?\z"))) thumb = null;
+            if (double.IsNaN(duration) || duration < 0 || duration > 86400) duration = 0;
+            return Http(url) && Http(page) && Header(userAgent) && Header(cookie) &&
             (title?.Length ?? 0) <= 4096 && (kind?.Length ?? 0) <= 40 && size >= 0 &&
             subtitles != null && subtitles.Count <= 100 && subtitles.All(s => s != null && Http(s.url) && Header(s.cookie) &&
                 Regex.IsMatch(s.lang ?? "und", @"^[a-zA-Z0-9-]{1,20}$") && (s.ext == null || s.ext == "srt" || s.ext == "vtt"));
+        }
 
         public Job Job(bool audio, int height, string format) => new Job
         {
