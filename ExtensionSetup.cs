@@ -18,7 +18,7 @@ namespace PastDow
     /// </summary>
     static class ExtensionSetup
     {
-        public sealed class Browser { public string Id, Name, Exe, Page; }
+        public sealed class Browser { public string Id, Name, Exe, Page, Args = ""; }
 
         public static string Folder => Path.Combine(Settings.Home, "extension");
 
@@ -75,14 +75,17 @@ namespace PastDow
             File.WriteAllText(Path.Combine(dir, "pairing.json"), "{\"key\":\"" + Settings.BrowserKey + "\"}", new UTF8Encoding(false));
         }
 
-        /// <summary>Unpacks, opens the browser's extensions page and returns the folder to paste in "Load unpacked".</summary>
-        public static string Open(string id)
+        /// <summary>
+        /// Unpacks and installs in that browser. Returns "done" when the extension is loaded by itself,
+        /// "guided" when the user has to finish (folder path then on the clipboard), or null when the browser is unknown.
+        /// Runs off the UI thread: the automation waits for the browser.
+        /// </summary>
+        public static string Install(string id, Action<string> step)
         {
             var b = Found().FirstOrDefault(x => x.Id == id);
             if (b == null) return null;
             Unpack();
-            Process.Start(new ProcessStartInfo(b.Exe, b.Page) { UseShellExecute = false });
-            return Folder;
+            return ExtensionAutoInstall.Run(b, Folder, step) ? "done" : "guided";
         }
     }
 }

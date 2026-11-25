@@ -253,11 +253,24 @@ namespace PastDow
                 case "browserKey": try { Clipboard.SetText(Settings.BrowserKey); lastClip = Settings.BrowserKey; } catch { } break;
                 case "installExt":
                     {
-                        // browsers only accept an extension from the user's hand: open the page, the folder path goes to the clipboard
-                        string folder = null;
-                        try { folder = ExtensionSetup.Open(S("browser")); } catch { }
-                        if (folder != null) { try { Clipboard.SetText(folder); lastClip = folder; } catch { } }
-                        Post(new { t = "extOpened", ok = folder != null, folder = folder ?? "" });
+                        // PastDow clicks through the browser's own steps (ExtensionAutoInstall); if that fails the
+                        // folder path goes to the clipboard and the page shows the two steps left
+                        string browser = S("browser");
+                        Task.Run(() =>
+                        {
+                            string result = null;
+                            try { result = ExtensionSetup.Install(browser, text => { try { BeginInvoke((Action)(() => Post(new { t = "extStep", text }))); } catch { } }); } catch { }
+                            try
+                            {
+                                BeginInvoke((Action)(() =>
+                                {
+                                    if (result == "guided") { try { Clipboard.SetText(ExtensionSetup.Folder); lastClip = ExtensionSetup.Folder; } catch { } }
+                                    Post(new { t = "extOpened", ok = result != null, auto = result == "done", folder = ExtensionSetup.Folder });
+                                    Activate();
+                                }));
+                            }
+                            catch { }
+                        });
                         break;
                     }
                 case "def":

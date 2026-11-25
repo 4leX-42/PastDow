@@ -418,7 +418,8 @@ function renderBrowsers(list) {
   const box = $('extButtons'); if (box.dataset.done === String(list.length)) return;
   box.dataset.done = String(list.length); box.replaceChildren();
   list.forEach(b => { const btn = document.createElement('button'); btn.textContent = 'ADD TO ' + b.name.toUpperCase();
-    btn.onclick = () => send({ t: 'installExt', browser: b.id }); box.append(btn); });
+    btn.onclick = () => { box.querySelectorAll('button').forEach(x => x.disabled = true); $('browserStatus').textContent = 'Opening ' + b.name + '…';
+      send({ t: 'installExt', browser: b.id }); }; box.append(btn); });
 }
 function renderFound(items) {
   $('foundCount').textContent = items.length || '';
@@ -525,10 +526,14 @@ function receive(m) {
   }
   if (m.t === 'jobs') renderJobs(m.jobs);
   if (m.t === 'found') renderFound(m.items);
+  if (m.t === 'extStep') $('browserStatus').textContent = m.text + '…  hands off the browser for a moment';
   if (m.t === 'extOpened') {
-    extHelp = m.ok ? 'In the page that opened: turn on Developer mode, press Load unpacked, paste with Ctrl+V and Select folder. It pairs by itself'
-                   : 'Could not open that browser';
-    $('browserStatus').textContent = extHelp; if (m.ok) toast('FOLDER PATH COPIED');
+    $('extButtons').querySelectorAll('button').forEach(b => b.disabled = false);
+    extHelp = !m.ok ? 'Could not open that browser'
+      : m.auto ? 'Installed and paired · play a video in that browser'
+      : 'Almost there: in the extensions page turn on Developer mode, press Load unpacked, paste with Ctrl+V and Select folder';
+    $('browserStatus').textContent = extHelp;
+    toast(!m.ok ? 'BROWSER NOT FOUND' : m.auto ? 'EXTENSION INSTALLED' : 'FOLDER PATH COPIED');
   }
 }
 
