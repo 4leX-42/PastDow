@@ -33,6 +33,14 @@ namespace PastDow
         public bool EngineSuspect;  // the error looks like yt-dlp is out of date (site changed), not a user-side problem
         public bool FixTried;       // already retried after an automatic yt-dlp update
         public string InfoJson;     // X posts: video files found through the FixTweet API, fed to yt-dlp with --load-info-json
+        // capture window (Capture.cs): the page the video was found in, and what yt-dlp needs to fetch it like the page did
+        public string Page, Referer, UserAgent, Cookie;
+        public string MediaKind, SubtitleNote;
+        public List<BrowserSubtitle> Subtitles = new List<BrowserSubtitle>();
+        public bool ForceCapture;   // yt-dlp could not read the page: find the video in the capture window
+        public bool Captured;       // Url is now the media file or stream caught in the capture window
+        public bool Unsupported;    // yt-dlp said "Unsupported URL"
+        public bool NeedsCapture => !Captured && (ForceCapture || Capture.Wants(Url));
 
         // UI-only animation state
         public readonly long Added = Environment.TickCount;
@@ -89,6 +97,11 @@ namespace PastDow
         {
             j.State = JobState.Running;
             j.Percent = 0; j.Phase = 0; j.Started = false; j.Speed = j.Eta = ""; j.Error = null; j.File = null;
+            if (j.Captured && !CapturedMedia.Manifest(j))
+            {
+                try { j.InfoJson = CapturedMedia.Info(j); }
+                catch (Exception) { j.State = JobState.Failed; j.Error = "Could not prepare the captured video"; Finished?.Invoke(j); return; }
+            }
             if (XPost.Is(j.Url))
             {
                 // network call: off the UI thread, then start yt-dlp from there
@@ -151,8 +164,9 @@ namespace PastDow
         }
 
         /// <summary>
-        /// Subtitles and thumbnails go inside the file; when a container cannot take them (WebM covers, some MP4
-        /// subtitles) yt-dlp leaves them next to it. Remove those leftovers so only the video or song remains.
+        /// Subtitles and thumbnails go inside the file; when a container cannot take them yt-dlp leaves them next
+        /// to it. Covers are always removed. Subtitle files are removed only when the video already carries a
+        /// subtitle track, because after a failed embed the sidecar is the only copy.
         /// </summary>
         static void CleanSidecars(string file)
         {
@@ -160,15 +174,37 @@ namespace PastDow
             {
                 if (file == null || !File.Exists(file)) return;
                 string dir = Path.GetDirectoryName(file), stem = Path.GetFileNameWithoutExtension(file);
+                bool? embedded = null;
                 foreach (var f in Directory.GetFiles(dir, stem + ".*"))
                 {
                     if (string.Equals(f, file, StringComparison.OrdinalIgnoreCase)) continue;
                     string ext = Path.GetExtension(f).ToLowerInvariant();
-                    if (ext == ".srt" || ext == ".vtt" || ext == ".ass" || ext == ".webp" || ext == ".jpg" || ext == ".jpeg" || ext == ".png")
-                        File.Delete(f);
+                    if (ext == ".webp" || ext == ".jpg" || ext == ".jpeg" || ext == ".png") File.Delete(f);
+                    else if (ext == ".srt" || ext == ".vtt" || ext == ".ass")
+                    {
+                        if (embedded == null) embedded = HasSubtitleTrack(file);
+                        if (embedded == true) File.Delete(f);
+                    }
                 }
             }
             catch { }
+        }
+
+        /// <summary>ffprobe: does the file hold at least one subtitle stream? False when it cannot tell.</summary>
+        static bool HasSubtitleTrack(string file)
+        {
+            try
+            {
+                var psi = Engine.Hidden(Path.Combine(Settings.BinDir, "ffprobe.exe"),
+                    "-v error -select_streams s -show_entries stream=index -of csv=p=0 " + Quote(file));
+                using (var p = Process.Start(psi))
+                {
+                    string output = p.StandardOutput.ReadToEnd();
+                    if (!p.WaitForExit(15000)) { try { p.Kill(); } catch { } return false; }
+                    return p.ExitCode == 0 && output.Trim().Length > 0;
+                }
+            }
+            catch { return false; }
         }
 
         static void Exit(Job j, Process p)
@@ -184,7 +220,15 @@ namespace PastDow
                 if (j.Error == null) j.Error = "yt-dlp exited with code " + code;
             }
             j.Speed = j.Eta = "";
-            if (j.State == JobState.Done) CleanSidecars(j.File);
+            if (j.State == JobState.Done)
+            {
+                if (j.Captured)
+                {
+                    try { CapturedMedia.Attach(j); } catch { j.SubtitleNote = "Subtitles could not be embedded"; }
+                    j.State = j.CancelRequested ? JobState.Canceled : JobState.Done;
+                }
+                CleanSidecars(j.File);
+            }
             DropInfo(j);
             try { p.Dispose(); } catch { }
             j.Proc = null;
@@ -209,7 +253,7 @@ namespace PastDow
                 }
                 return;
             }
-            if (s.StartsWith("VGT|")) { j.Title = s.Substring(4); return; }
+            if (s.StartsWith("VGT|")) { if (!(j.Captured && j.Title != null)) j.Title = s.Substring(4); return; }
             if (s.StartsWith("VGF|")) { j.File = s.Substring(4); return; }
             if (s.StartsWith("[download] Destination:") && !SubFile.IsMatch(s)) { j.Phase++; j.Percent = 0; j.Shown = 0; j.Started = true; return; }
             if (s.Contains("has already been recorded in the archive")) { j.State = JobState.Skipped; return; }
@@ -222,6 +266,7 @@ namespace PastDow
                 string msg = s.Substring(6).Trim();
                 j.Error = Friendly(msg);
                 j.EngineSuspect = !UserSide(msg);
+                if (msg.Contains("Unsupported URL")) j.Unsupported = true;
             }
         }
 
@@ -281,10 +326,18 @@ namespace PastDow
                 "--ignore-errors" // a failing subtitle (e.g. HTTP 429) must not fail the whole video
             };
             string fmt = j.Format ?? (j.Audio ? "best" : "mkv");   // audio best = keep the source codec, no re-encode
+            // a file caught in the capture window has no useful title of its own (often "playback" or a hash): use the page's
+            string named = j.Captured && !string.IsNullOrWhiteSpace(j.Title) ? Literal(j.Title) + " [%(id).40B].%(ext)s" : null;
+            if (j.Captured)
+            {
+                if (j.Referer != null) { a.Add("--referer"); a.Add(j.Referer); }
+                if (j.UserAgent != null) { a.Add("--user-agent"); a.Add(j.UserAgent); }
+                if (j.Cookie != null && j.InfoJson == null) { a.Add("--add-header"); a.Add("Cookie:" + j.Cookie); }
+            }
             if (j.Audio)
             {
                 a.AddRange(new[] { "-f", "ba/b", "-x", "--audio-format", fmt, "--audio-quality", "0",
-                    "-o", (Settings.ChannelFolders ? "%(uploader,channel,uploader_id|Various)s/" : "") + "%(title).150B.%(ext)s" });
+                    "-o", named ?? (Settings.ChannelFolders ? "%(uploader,channel,uploader_id|Various)s/" : "") + "%(title).150B.%(ext)s" });
                 if (fmt == "wav") a.Remove("--embed-thumbnail");   // WAV has nowhere to keep a cover
             }
             else
@@ -292,23 +345,36 @@ namespace PastDow
                 // same resolution and fps first; then prefer streams that fit the container without re-encoding
                 if (fmt == "webm") a.Remove("--embed-thumbnail");   // WebM cannot hold a cover image
                 string sort = fmt == "mp4" ? "res,fps,hdr,ext:mp4:m4a" : fmt == "webm" ? "res,fps,hdr,ext:webm:webm" : "res,fps,hdr,vcodec,br";
-                a.AddRange(new[] { "-f", j.MaxHeight > 0 ? $"bv*[height<={j.MaxHeight}]+ba/b[height<={j.MaxHeight}]" : "bv*+ba/b",
+                // a captured file often carries no height: "/b" then takes it as it is instead of failing
+                a.AddRange(new[] { "-f", j.MaxHeight > 0 ? $"bv*[height<={j.MaxHeight}]+ba/b[height<={j.MaxHeight}]" + (j.Captured ? "/b" : "") : "bv*+ba/b",
                     "-S", sort, "--merge-output-format", fmt, "--remux-video", fmt,
-                    "--embed-chapters", "--embed-subs", "--sub-langs", "es,en,es-orig,en-orig", "--write-subs", "--write-auto-subs",
+                    "--embed-chapters", "--embed-subs", "--sub-langs", j.Captured ? "all" : "es,en,es-orig,en-orig", "--write-subs", "--write-auto-subs",
                     "--convert-subs", fmt == "webm" ? "vtt" : "srt",
-                    "-o", (Settings.ChannelFolders ? "%(uploader,channel,uploader_id,playlist_uploader|Various)s/" : "") + "%(title).150B [%(id)s].%(ext)s" });
+                    "-o", named ?? (Settings.ChannelFolders ? "%(uploader,channel,uploader_id,playlist_uploader|Various)s/" : "") + "%(title).150B [%(id)s].%(ext)s" });
             }
             if (j.Force) a.Add("--force-overwrites");
             else
             {
                 a.Add("--no-overwrites");
-                if (Settings.SkipDone) { a.Add("--download-archive"); a.Add(Settings.Archive(j.Audio)); }
+                // captured links get generic ids from their file name ("master" for most HLS streams), so the
+                // archive would skip a different recording that happens to share it
+                if (Settings.SkipDone && !j.Captured) { a.Add("--download-archive"); a.Add(Settings.Archive(j.Audio)); }
             }
             if (j.InfoJson != null) { a.Add("--load-info-json"); a.Add(j.InfoJson); }
             else { a.Add("--"); a.Add(j.Url); }
             var sb = new StringBuilder();
             foreach (var x in a) { if (sb.Length > 0) sb.Append(' '); sb.Append(Quote(x)); }
             return sb.ToString();
+        }
+
+        /// <summary>A page title as a literal piece of an output template: no % fields, no characters Windows forbids.</summary>
+        static string Literal(string title)
+        {
+            var sb = new StringBuilder();
+            foreach (char c in title) sb.Append(c < 32 || "<>:\"/\\|?*".IndexOf(c) >= 0 ? ' ' : c);
+            string t = Regex.Replace(sb.ToString(), @"\s+", " ").Trim().TrimEnd('.');
+            if (t.Length > 120) t = t.Substring(0, 120).TrimEnd();
+            return (t.Length == 0 ? "video" : t).Replace("%", "%%");
         }
 
         /// <summary>Quoting per CommandLineToArgvW rules (backslashes before quotes and at the end).</summary>

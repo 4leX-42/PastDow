@@ -59,6 +59,7 @@ namespace PastDow
                 catch (IOException) { throw; }
                 catch { }
             File.Copy(Self, Exe, true);
+            RegisterProtocol(Exe);
             RemoveUlvark();
             Shortcut(StartLnk);
             if (desktop) Shortcut(DesktopLnk); else TryDelete(DesktopLnk);
@@ -83,12 +84,33 @@ namespace PastDow
             Process.Start(new ProcessStartInfo(Exe, string.Join(" ", args.Select(Runner.Quote))) { UseShellExecute = false, WorkingDirectory = Dir });
         }
 
+        /// <summary>Repairs the per-user URL handler for this copy of PastDow.</summary>
+        public static void RegisterProtocol(string exe)
+        {
+            const string path = @"Software\Classes\pastdow";
+            string command = "\"" + exe + "\" \"%1\"";
+            try
+            {
+                using (var current = Registry.CurrentUser.OpenSubKey(path + @"\shell\open\command"))
+                using (var root = Registry.CurrentUser.OpenSubKey(path))
+                    if (string.Equals(current?.GetValue(null) as string, command, StringComparison.OrdinalIgnoreCase) && root?.GetValue("URL Protocol") != null) return;
+                using (var root = Registry.CurrentUser.CreateSubKey(path))
+                {
+                    root.SetValue(null, "URL:PastDow");
+                    root.SetValue("URL Protocol", "");
+                    using (var open = root.CreateSubKey(@"shell\open\command")) open.SetValue(null, command);
+                }
+            }
+            catch { }
+        }
+
         /// <summary>Removes the app, its shortcuts, its uninstall entry and its data (engine, settings). Downloads stay.</summary>
         public static void Uninstall()
         {
             TryDelete(StartLnk);
             TryDelete(DesktopLnk);
             try { Registry.CurrentUser.DeleteSubKeyTree(UninstallKey, false); } catch { }
+            try { Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\pastdow", false); } catch { }   // the browser extension's link
             // the running exe cannot delete itself: a hidden cmd waits for it to exit, then removes both folders
             string cmd = "/c ping 127.0.0.1 -n 3 >nul & rmdir /s /q \"" + Dir + "\" & rmdir /s /q \"" + Settings.Home + "\"";
             Process.Start(new ProcessStartInfo("cmd.exe", cmd) { CreateNoWindow = true, UseShellExecute = false, WorkingDirectory = Path.GetTempPath() });

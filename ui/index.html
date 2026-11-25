@@ -185,6 +185,26 @@
   .side .x { position:absolute; right:46px; top:40px; font-size:12px; letter-spacing:.3em; color:var(--sub); font-weight:400; }
   .side .x:hover { color:var(--fg); }
   .side .ver { margin-top:auto; font-size:10.5px; letter-spacing:.26em; color:var(--dim); }
+  .view-tabs { position:absolute; left:210px; top:111px; display:flex; gap:28px; font-size:11px; letter-spacing:.24em; color:var(--mute); }
+  .view-tabs button { padding-bottom:7px; border-bottom:1px solid transparent; }
+  .view-tabs button.active { color:var(--fg); border-color:var(--fg); }
+  .browser-box { display:none; position:absolute; left:210px; right:250px; top:166px; height:156px; }
+  .browser-head { display:flex; justify-content:space-between; font-size:10.5px; letter-spacing:.2em; color:var(--mute); height:25px; }
+  .browser-items { overflow-x:hidden; overflow-y:auto; max-height:131px; padding-right:6px; }
+  .browser-items::-webkit-scrollbar { width:2px; } .browser-items::-webkit-scrollbar-thumb { background:#333; }
+  .browser-item { display:block; position:relative; box-sizing:border-box; width:100%; text-align:left; border-top:1px solid #222; padding:10px 110px 10px 0; }
+  .browser-item .ttl { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .browser-item::after { content:'DOWNLOAD \2192'; position:absolute; right:0; top:50%; transform:translate(-6px,-50%); opacity:0;
+    font-size:10.5px; letter-spacing:.2em; color:var(--fg); transition:opacity .18s, transform .18s; }
+  .browser-item:hover .ttl { color:#fff; } .browser-item:hover::after { opacity:1; transform:translate(0,-50%); }
+  .browser-empty { color:var(--sub); font-size:14px; line-height:1.7; max-width:570px; padding-top:13px; }
+  .browser-view .browser-box { display:block; }
+  .browser-view .h1, .browser-view .h2, .browser-view .pill, .browser-view .link, .browser-view #url,
+  .browser-view .orb, .browser-view .ring, .browser-view .flare, .browser-view .beam, .browser-view .dl { display:none; }
+  .browser-view .opts.idle { opacity:1; }
+  .pair-key { background:#111; border:1px solid #333; color:var(--sub); width:100%; padding:7px; margin:7px 0; font:11px monospace; user-select:text; }
+  #copyKey { font-size:11px; letter-spacing:.2em; color:var(--fg); padding:5px 0; }
+  #browserStatus { white-space:normal; }
 </style>
 </head>
 <body>
@@ -224,6 +244,12 @@
   <button class="wbtn intro" id="min" title="Minimise"><svg viewBox="0 0 12 12"><path d="M1 6h10" stroke="currentColor" stroke-width="1"/></svg></button>
   <button class="wbtn intro" id="close" title="Close"><svg viewBox="0 0 12 12"><path d="M1.5 1.5l9 9M10.5 1.5l-9 9" stroke="currentColor" stroke-width="1"/></svg></button>
 
+  <nav class="view-tabs"><button id="pasteTab" class="active">PASTE</button><button id="browserTab">BROWSER <span id="foundCount"></span></button></nav>
+  <section class="browser-box">
+    <div class="browser-head"><span>FOUND IN YOUR BROWSER</span><button id="foundClear">CLEAR ALL</button></div>
+    <div class="browser-items" id="foundItems"></div>
+    <div class="browser-empty" id="foundEmpty">Nothing yet. Play a video in your browser and it shows up here.<br>First time: add the PastDow extension and paste the key from MENU into it.</div>
+  </section>
   <div class="vline"></div>
   <div class="steps intro" style="animation-delay:.15s">
     <div class="step on" id="s1"><b>01</b>PASTE</div>
@@ -276,6 +302,7 @@
     </div>
     <button class="it" style="transition-delay:.30s" id="mUpdate"><b>UPDATE YT-DLP</b><em></em></button>
     <button class="it" style="transition-delay:.36s" id="mSource"><b>SOURCE CODE</b><em>github.com/4leX-42/PastDow</em></button>
+    <div class="it" style="transition-delay:.38s"><b>BROWSER EXTENSION</b><input id="browserKey" class="pair-key" readonly aria-label="Browser pairing key"><button id="copyKey">COPY</button><em id="browserStatus"></em></div>
     <div class="ver" id="ver"></div>
     <div class="dd" id="dd"></div>
   </div>
@@ -373,6 +400,31 @@ $('close').addEventListener('click', () => send({ t: 'close' }));
 $('open').addEventListener('click', () => send({ t: 'openFolder' }));
 $('savebox').addEventListener('click', () => send({ t: 'pickFolder', audio: st.mode === 'audio' }));
 $('clear').addEventListener('click', () => send({ t: 'clearDone' }));
+function selectView(browser) {
+  win.classList.toggle('browser-view', browser);
+  $('browserTab').classList.toggle('active', browser); $('pasteTab').classList.toggle('active', !browser);
+}
+$('pasteTab').onclick = () => selectView(false);
+$('browserTab').onclick = () => selectView(true);
+$('foundClear').onclick = () => send({ t: 'foundClear' });
+$('copyKey').onclick = () => { send({ t: 'browserKey' }); $('copyKey').textContent = 'COPIED'; setTimeout(() => $('copyKey').textContent = 'COPY', 2000); };
+function renderFound(items) {
+  $('foundCount').textContent = items.length || '';
+  $('foundEmpty').hidden = items.length > 0;
+  $('foundClear').style.visibility = items.length ? 'visible' : 'hidden';
+  $('foundItems').replaceChildren();
+  items.forEach(item => {
+    const row = document.createElement('button'); row.className = 'browser-item';
+    const title = document.createElement('div'), sub = document.createElement('div'); title.className = 'ttl'; sub.className = 'sub';
+    title.textContent = item.title || 'Browser video';
+    sub.textContent = [item.kind, item.size ? (item.size / 1048576).toFixed(1) + ' MB' : 'SIZE UNKNOWN', item.host, item.subtitles ? item.subtitles + (item.subtitles === 1 ? ' SUBTITLE' : ' SUBTITLES') : ''].filter(Boolean).join(' · ');
+    row.append(title, sub); row.onclick = () => {
+      send({ t: 'foundQueue', id: item.id, mode: st.mode, q: st.q, fmt: st.mode === 'audio' ? st.afmt : st.vfmt }); toast('BROWSER VIDEO ADDED');
+    };
+    $('foundItems').append(row);
+  });
+}
+renderFound([]);
 
 $('menuBtn').addEventListener('click', () => $('side').classList.toggle('open'));
 $('closeMenu').addEventListener('click', () => $('side').classList.remove('open'));
@@ -450,11 +502,14 @@ function receive(m) {
     $('mSkip').querySelector('em').textContent = m.skip ? 'On' : 'Off';
     $('mFolders').querySelector('em').textContent = m.channelFolders ? 'One folder per channel' : 'Off · straight into the folder';
     $('mUpdate').querySelector('em').textContent = m.update;
+    $('browserKey').value = m.browserKey || '';
+    $('browserStatus').textContent = m.browserStatus || 'Paste this key into the extension popup';
     $('ver').textContent = 'PAST&DOW ' + m.version + ' · POWERED BY YT-DLP';
     $('h2').textContent = m.engine || 'And let PastDow do the rest';
     $('setup').style.width = m.enginePct >= 0 ? (m.enginePct * 588) + 'px' : '0';
   }
   if (m.t === 'jobs') renderJobs(m.jobs);
+  if (m.t === 'found') renderFound(m.items);
 }
 
 function renderJobs(jobs) {
@@ -480,7 +535,7 @@ function renderJobs(jobs) {
     else if (j.state === 'running' && !j.started) { left = '<div class="spin"></div>'; sub = j.kind + ' · FETCHING INFO'; acts = [['cancel', 'CANCEL']]; }
     else if (j.state === 'running') { left = `${Math.floor(j.pct)}<small>%</small>`; sub = j.pct >= 99.5 ? j.kind + ' · FINISHING' : [j.kind, j.speed, j.eta && j.eta + ' LEFT'].filter(Boolean).join(' · '); acts = [['cancel', 'CANCEL']]; }
     else if (j.state === 'processing') { left = '<div class="spin"></div>'; sub = j.kind + (j.audio ? ' · CONVERTING' : ' · MERGING'); acts = []; }
-    else if (j.state === 'done') { left = '<span class="tag">DONE</span>'; sub = [j.kind, j.size].filter(Boolean).join(' · '); acts = [['open', 'OPEN'], ['reveal', 'FOLDER'], ['remove', '✕']]; }
+    else if (j.state === 'done') { left = '<span class="tag">DONE</span>'; sub = [j.kind, j.size, j.subtitleNote].filter(Boolean).join(' · '); acts = [['open', 'OPEN'], ['reveal', 'FOLDER'], ['remove', '✕']]; }
     else if (j.state === 'skipped') { left = '<span class="tag">SKIPPED</span>'; sub = j.kind + ' · ALREADY DOWNLOADED'; acts = [['retry', 'AGAIN'], ['remove', '✕']]; }
     else if (j.state === 'canceled') { left = '<span class="tag">CANCELED</span>'; sub = j.kind; acts = [['retry', 'RETRY'], ['remove', '✕']]; }
     else { left = '<span class="tag" style="color:#e07a72">FAILED</span>'; sub = j.error || 'Error'; acts = [['retry', 'RETRY'], ['copy', 'COPY LINK'], ['remove', '✕']]; }
