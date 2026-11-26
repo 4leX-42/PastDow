@@ -1,5 +1,6 @@
 const $ = id => document.getElementById(id);
 let tabId;
+const names = {};   // item id -> name typed with the pencil (kept while the popup is open)
 
 async function message(body) {
   const result = await chrome.runtime.sendMessage(body);
@@ -48,14 +49,23 @@ async function refresh(capture = true) {
       const subs = document.createElement('span'); subs.className = 'subtitles'; subs.textContent = 'CC'; subs.title = 'Subtitles available'; preview.append(subs);
     }
     const kind = document.createElement('span'); kind.className = 'kind'; kind.textContent = item.kind;
-    title.textContent = result.title || new URL(item.url).pathname.split('/').pop() || 'Video';
+    title.textContent = names[item.id] || result.title || new URL(item.url).pathname.split('/').pop() || 'Video';
     title.title = title.textContent;
+    // pencil: edit the file name in place before downloading
+    const edit = document.createElement('button'); edit.className = 'pencil'; edit.title = 'Rename before downloading'; edit.textContent = '\u270e';
+    edit.onclick = () => {
+      const input = document.createElement('input'); input.className = 'rename'; input.value = title.textContent; input.maxLength = 200;
+      const done = keep => { if (keep && input.value.trim()) names[item.id] = input.value.trim(); title.textContent = names[item.id] || title.textContent; title.title = title.textContent; input.replaceWith(title); };
+      input.onkeydown = e => { if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); };
+      input.onblur = () => done(true);
+      title.replaceWith(input); input.focus(); input.select();
+    };
     small.textContent = detail(item, 0).split(' · ').slice(1).join(' · ');
     button.textContent = 'DOWNLOAD';
     button.onclick = async () => {
       button.disabled = true;
       try {
-        const sent = await message({ t: 'download', tabId, id: item.id });
+        const sent = await message({ t: 'download', tabId, id: item.id, name: names[item.id] || '' });
         if (sent.protocol) {
           // PastDow is closed: its pastdow: handler opens it with this video
           const link = document.createElement('a'); link.href = sent.protocol; link.textContent = 'Open PastDow';
@@ -64,7 +74,8 @@ async function refresh(capture = true) {
         } else { $('status').textContent = 'Added to PastDow'; button.textContent = 'ADDED'; }
       } catch (error) { $('status').textContent = error.message; button.disabled = false; }
     };
-    text.append(kind, title, small, button); row.append(preview, text); $('items').append(row);
+    const actions = document.createElement('div'); actions.className = 'actions'; actions.append(edit, button);
+    text.append(kind, title, small, actions); row.append(preview, text); $('items').append(row);
   }
 }
 

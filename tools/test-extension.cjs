@@ -178,6 +178,9 @@ const detect = (url, type, length, tabId = 1) => events.headers({ tabId, url, st
   assert.ok(found.userAgent);
   const id = session['tab:1'].media[0].id;
   assert.equal((await message({ t: 'download', tabId: 1, id })).ok, true);
+  // pencil in the popup: the chosen name travels with the queued item
+  assert.equal((await message({ t: 'download', tabId: 1, id, name: '  Clase 3 - repaso  ' })).ok, true);
+  assert.equal(JSON.parse(sent.filter(x => x.url === '/queue').at(-1).options.body).name, 'Clase 3 - repaso');
   const queuedMedia = JSON.parse(sent.filter(x => x.url === '/queue').at(-1).options.body);
   assert.equal(queuedMedia.thumb, thumbnail); assert.equal(queuedMedia.duration, 125);
   assert.ok(sent.some(x => x.url === '/found' && JSON.parse(x.options.body).thumb === thumbnail));
@@ -312,5 +315,5 @@ const detect = (url, type, length, tabId = 1) => events.headers({ tabId, url, st
   events.navigate({ tabId: 1, frameId: 1 }); await flush(); assert.equal(session['tab:1'].media.length, 1);
   events.navigate({ tabId: 1, frameId: 0 }); await flush(); assert.equal(session['tab:1'], undefined);
   assert.equal(session['tab:2'].media.length, 1);
-  console.log('Extension: YouTube PAGE/SPA and chunks, canvas priority, black/flat rejection, duplicate fast path, probe throttle, readiness gating, scheduled retries, controls crop, fallback-only posters, ready-frame updates, thumbnails, duration, active-tab capture, poster fallback and upgrade, size limit, visible-video selection, capture/script failures, preservation, found/queue payloads, manifest, icons, JavaScript syntax, filters, sizes, subtitles, dedupe, per-tab state, headers, queue, fallback, sealed messages, server proof, auto-pairing, auth rejection and navigation passed');
+  console.log('Extension: YouTube PAGE/SPA and chunks, canvas priority, black/flat rejection, duplicate fast path, probe throttle, readiness gating, scheduled retries, controls crop, fallback-only posters, ready-frame updates, thumbnails, duration, active-tab capture, poster fallback and upgrade, size limit, visible-video selection, capture/script failures, preservation, found/queue payloads, manifest, icons, JavaScript syntax, filters, sizes, subtitles, dedupe, per-tab state, headers, queue, fallback, sealed messages, server proof, rename, auto-pairing, auth rejection and navigation passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

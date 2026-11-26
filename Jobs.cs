@@ -35,6 +35,7 @@ namespace PastDow
         public string InfoJson;     // X posts: video files found through the FixTweet API, fed to yt-dlp with --load-info-json
         // capture window (Capture.cs): the page the video was found in, and what yt-dlp needs to fetch it like the page did
         public string Page, Referer, UserAgent, Cookie;
+        public string CustomName;   // renamed with the pencil before downloading: the file gets exactly this name
         public string MediaKind, SubtitleNote;
         public List<BrowserSubtitle> Subtitles = new List<BrowserSubtitle>();
         public bool ForceCapture;   // yt-dlp could not read the page: find the video in the capture window
@@ -253,7 +254,7 @@ namespace PastDow
                 }
                 return;
             }
-            if (s.StartsWith("VGT|")) { if (!(j.Captured && j.Title != null)) j.Title = s.Substring(4); return; }
+            if (s.StartsWith("VGT|")) { if (j.CustomName == null && !(j.Captured && j.Title != null)) j.Title = s.Substring(4); return; }
             if (s.StartsWith("VGF|")) { j.File = s.Substring(4); return; }
             if (s.StartsWith("[download] Destination:") && !SubFile.IsMatch(s)) { j.Phase++; j.Percent = 0; j.Shown = 0; j.Started = true; return; }
             if (s.Contains("has already been recorded in the archive")) { j.State = JobState.Skipped; return; }
@@ -327,7 +328,8 @@ namespace PastDow
             };
             string fmt = j.Format ?? (j.Audio ? "best" : "mkv");   // audio best = keep the source codec, no re-encode
             // a file caught in the capture window has no useful title of its own (often "playback" or a hash): use the page's
-            string named = j.Captured && !string.IsNullOrWhiteSpace(j.Title) ? Literal(j.Title) + " [%(id).40B].%(ext)s" : null;
+            string named = j.CustomName != null ? Literal(j.CustomName) + ".%(ext)s"
+                : j.Captured && !string.IsNullOrWhiteSpace(j.Title) ? Literal(j.Title) + " [%(id).40B].%(ext)s" : null;
             if (j.Captured)
             {
                 if (j.Referer != null) { a.Add("--referer"); a.Add(j.Referer); }
