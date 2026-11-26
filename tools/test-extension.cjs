@@ -11,6 +11,9 @@ for (const file of ['background.js', 'popup.js']) new vm.Script(fs.readFileSync(
 new vm.Script(fs.readFileSync(path.join(root, 'ui/index.html'), 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1]);
 const session = {}, local = { key: 'a'.repeat(64) }, sent = [], wire = [], events = {};
 let scriptGate = null;
+let now = Date.now(), probes = 0, writes = 0, blackCapture = false, blackFrame = false, flatPixels = false;
+const tabUrls = new Map(), imageRequests = [];
+class Clock extends Date { static now() { return now; } }
 const timers = new Map(); let timerId = 0, posterFetches = 0;
 const probe = { readyState: 2, videoWidth: 640, videoHeight: 360, currentTime: 1, paused: false, controls: false };
 let captureFails = false, activeTab = 1, captures = 0, scriptFails = false, posterMode = false, jpegBytes = [1, 2, 3];
@@ -19,27 +22,47 @@ let offline = false, reject = false, impostor = false, pairingFile = null;
 const nodeCrypto = require('node:crypto');
 const storage = data => ({
   get: async key => ({ [key]: data[key] }),
-  set: async value => Object.assign(data, structuredClone(value)),
+  set: async value => { if (data === session) writes++; return Object.assign(data, structuredClone(value)); },
   remove: async key => { delete data[key]; }
 });
 const chrome = {
   storage: { session: storage(session), local: storage(local) },
   cookies: { getAll: async ({ url }) => [{ name: 'session', value: new URL(url).host, path: '/', domain: new URL(url).host }] },
-  scripting: { executeScript: async options => { assert.equal(options.target.allFrames, true); if (scriptFails) throw Error('restricted'); if (scriptGate) await scriptGate; return [{ result: { ...probe, poster: posterMode ? 'https://images.example/poster.jpg' : null, rect: { x: 10, y: 20, width: 640, height: 360 }, area: 230400, devicePixelRatio: 2, duration: 125 } }]; } },
-  tabs: { query: async () => [{ id: activeTab }], captureVisibleTab: async (windowId, options) => { captures++; assert.equal(options.format, 'jpeg'); if (captureFails) throw Error('capture failed'); return thumbnail; }, get: async id => ({ id, windowId: 1, url: `https://page.example/${id}`, title: 'Recording' }), onRemoved: { addListener: f => events.remove = f } },
+  scripting: { executeScript: async options => { probes++; assert.equal(options.target.allFrames, true); if (scriptFails) throw Error('restricted'); if (scriptGate) await scriptGate; return [{ result: { ...probe, poster: posterMode ? 'https://images.example/poster.jpg' : null, rect: { x: 10, y: 20, width: 640, height: 360 }, area: 230400, devicePixelRatio: 2, duration: 125 } }]; } },
+  tabs: { query: async () => [{ id: activeTab }], captureVisibleTab: async (windowId, options) => { captures++; assert.equal(options.format, 'jpeg'); if (captureFails) throw Error('capture failed'); return thumbnail; }, get: async id => ({ id, windowId: 1, url: tabUrls.get(id) || `https://page.example/${id}`, title: 'Recording' }), onUpdated: { addListener: f => events.update = f }, onRemoved: { addListener: f => events.remove = f } },
   action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async ({ color }) => assert.equal(color, '#f5f5f3'), setBadgeTextColor: async ({ color }) => assert.equal(color, '#000000') },
   webRequest: { onHeadersReceived: { addListener: (f, filter, extra) => { events.headers = f; assert.deepEqual(extra, ['responseHeaders']); } } },
-  webNavigation: { onBeforeNavigate: { addListener: f => events.navigate = f } },
+  webNavigation: { onCommitted: { addListener: f => events.commit = f }, onHistoryStateUpdated: { addListener: f => events.history = f }, onBeforeNavigate: { addListener: f => events.navigate = f } },
   runtime: { id: 'test', onMessage: { addListener: f => events.message = f } }
 };
-const context = vm.createContext({
+const context = vm.createContext({ Date: Clock,
   setTimeout: (callback, delay) => { const id = ++timerId; timers.set(id, { callback, delay }); return id; },
   clearTimeout: id => timers.delete(id),
-  createImageBitmap: async () => ({ width: 1920, height: 1080, close() {} }), OffscreenCanvas: class { constructor(w, h) { assert.ok(w <= 320); this.width = w; this.height = h; } getContext() { return { drawImage: (...args) => { if (args[1] !== 0) { assert.equal(args[1], 20); assert.equal(args[2], 40); assert.equal(args[3], 1280); assert.equal(args[4], 720); } } }; } async convertToBlob(options) { assert.equal(options.quality, .7); return { arrayBuffer: async () => new Uint8Array(jpegBytes).buffer }; } }, chrome, URL, navigator: { userAgent: 'Browser Test' }, TextEncoder, AbortSignal, crypto: globalThis.crypto, Uint8Array,
+  createImageBitmap: async blob => ({ width: 1920, height: 1080, source: blob.source, close() {} }),
+  OffscreenCanvas: class {
+    constructor(w, h) { assert.ok(w <= 320); this.width = w; this.height = h; }
+    getContext() { return {
+      drawImage: (...args) => {
+        this.source = args[0].source;
+        if (args[1] !== 0) { assert.equal(args[1], 20); assert.equal(args[2], 40); assert.equal(args[3], 1280); assert.equal(args[4], 720); }
+      },
+      getImageData: () => {
+        const data = new Uint8ClampedArray(32 * 18 * 4);
+        for (let i = 0; i < data.length; i += 4) {
+          const value = (blackCapture && this.source === 'capture') || (blackFrame && this.source === 'frame') ? 0 : flatPixels ? 100 : i % 8 ? 40 : 180;
+          data[i] = data[i + 1] = data[i + 2] = value; data[i + 3] = 255;
+        }
+        return { data };
+      }
+    }; }
+    async convertToBlob(options) { assert.equal(options.quality, .7); return { arrayBuffer: async () => new Uint8Array(jpegBytes).buffer }; }
+  }, chrome, URL, navigator: { userAgent: 'Browser Test' }, TextEncoder, AbortSignal, crypto: globalThis.crypto, Uint8Array,
   btoa: value => Buffer.from(value, 'binary').toString('base64'),
   fetch: async (url, options) => {
-    if (url === 'https://images.example/poster.jpg') { posterFetches++; return { ok: true, headers: { get: () => 'image/jpeg' }, blob: async () => ({ size: 1000 }) }; }
-    if (url === thumbnail) return { blob: async () => ({}) };
+    if (url === 'https://images.example/poster.jpg') { imageRequests.push(url); posterFetches++; return { ok: true, headers: { get: () => 'image/jpeg' }, blob: async () => ({ size: 1000 }) }; }
+    if (url === thumbnail) return { blob: async () => ({ source: 'capture' }) };
+    if (url === 'data:image/jpeg;base64,CAkK') return { blob: async () => ({ source: 'frame' }) };
+    if (/^https:\/\/(images.example|i.ytimg.com)\//.test(url)) { assert.equal(options.credentials, 'omit'); imageRequests.push(url); posterFetches++; return { ok: true, headers: { get: () => 'image/jpeg' }, blob: async () => ({ size: 1000, source: 'poster' }) }; }
     if (offline) throw new TypeError('Failed to fetch');
     if (url.endsWith('/pairing.json')) return { ok: !!pairingFile, status: pairingFile ? 200 : 404, json: async () => pairingFile };
     // what actually goes over the wire, for the "no key, no cookie in clear" checks
@@ -55,7 +78,7 @@ const context = vm.createContext({
     assert.equal(mac, env.mac);
     const decipher = nodeCrypto.createDecipheriv('aes-256-cbc', derive('pastdow-enc'), Buffer.from(env.iv, 'hex'));
     const msg = JSON.parse(Buffer.concat([decipher.update(Buffer.from(env.ct, 'base64')), decipher.final()]).toString());
-    assert.ok(Math.abs(Date.now() - msg.ts) < 5000); assert.match(msg.nonce, /^[a-f0-9]{32}$/);
+    assert.ok(Math.abs(now - msg.ts) < 5000); assert.match(msg.nonce, /^[a-f0-9]{32}$/);
     sent.push({ url: '/' + msg.op, options: { body: JSON.stringify(msg.media || {}) } });
     const proof = nodeCrypto.createHmac('sha256', macKey).update('pastdow-ok:' + msg.nonce).digest('hex');
     return { ok: true, status: 200, json: async () => ({ proof }) };
@@ -66,8 +89,9 @@ chrome.webRequest.onHeadersReceived.addListener = (f, filter, extra) => { events
 vm.runInContext(source, context);
 const classify = (url, type, length, range) => context.classify({ tabId: 1, url, statusCode: 200,
   responseHeaders: [{ name: 'Content-Type', value: type }, { name: 'Content-Length', value: String(length || 0) }, { name: 'Content-Range', value: range || '' }] });
-const message = body => new Promise(resolve => events.message(body, { id: 'test' }, resolve));
+const message = body => new Promise(resolve => { now += 1500; events.message(body, { id: 'test' }, resolve); });
 const flush = async () => {
+  now += 1500;
   await vm.runInContext('Promise.all([...chains.values()])', context);
   await vm.runInContext('Promise.all([...previews.values()])', context);
   await vm.runInContext('Promise.all([...chains.values()])', context);
@@ -84,12 +108,21 @@ const detect = (url, type, length, tabId = 1) => events.headers({ tabId, url, st
   const frame = {}; frame.top = frame;
   const inspected = vm.runInNewContext('(' + context.inspectVideo.toString() + ')()', {
     window: frame, innerWidth: 1000, innerHeight: 800, devicePixelRatio: 2, getComputedStyle: v => v.style,
-    document: { querySelector: () => ({ content: 'https://images.example/og.jpg' }), querySelectorAll: () => [fakeVideo(800, 700, 999, 'hidden'), fakeVideo(640, 360, 125), fakeVideo(100, 100, Infinity)] }
+    document: { querySelector: () => ({ content: 'https://images.example/og.jpg' }), createElement: () => ({ getContext: () => ({ drawImage() {} }), toDataURL: () => 'data:image/jpeg;base64,CAkK' }), querySelectorAll: () => [fakeVideo(800, 700, 999, 'hidden'), fakeVideo(640, 360, 125), fakeVideo(100, 100, Infinity)] }
   });
   assert.equal(inspected.duration, 125); assert.equal(inspected.rect.width, 640); assert.equal(inspected.rect.height, 360);
   assert.equal(inspected.devicePixelRatio, 2); assert.equal(inspected.og, 'https://images.example/og.jpg');
   assert.equal(inspected.readyState, 2); assert.equal(inspected.videoWidth, 640); assert.equal(inspected.videoHeight, 360);
   assert.equal(inspected.currentTime, 1); assert.equal(inspected.paused, false); assert.equal(inspected.controls, true);
+  assert.equal(inspected.frame, 'data:image/jpeg;base64,CAkK', 'probe draws the selected video into a page canvas');
+  const tainted = vm.runInNewContext('(' + context.inspectVideo.toString() + ')()', {
+    window: frame, innerWidth: 1000, innerHeight: 800, devicePixelRatio: 2, getComputedStyle: v => v.style,
+    document: { querySelector: () => null, querySelectorAll: () => [fakeVideo(640, 360, 125)],
+      createElement: () => ({ getContext: () => ({ drawImage() {} }), toDataURL: () => { throw new Error('Tainted canvas'); } }) }
+  });
+  assert.equal(tainted.frame, undefined, 'tainted canvas leaves screen capture available');
+  assert.equal(tainted.rect.width, 640);
+
   const readyVideo = { ...probe, rect: { x: 10, y: 20, width: 640, height: 360 } };
   assert.equal(context.readyForThumbnail(readyVideo), true);
   for (const invalid of [{ readyState: 1 }, { videoWidth: 0 }, { currentTime: .3, paused: true }, { rect: { width: 119, height: 68 } }, { rect: { width: 120, height: 67 } }])
@@ -100,6 +133,13 @@ const detect = (url, type, length, tabId = 1) => events.headers({ tabId, url, st
   assert.ok(Math.abs(cropped.width / cropped.height - 16 / 9) < .0001);
   assert.ok(cropped.y + cropped.height <= 20 + 360 * .82);
 
+  assert.equal(classify('https://r1.googlevideo.com/videoplayback?range=0-100', 'video/mp4', 900000), null);
+  assert.equal(classify('https://googlevideo.com/videoplayback', 'video/mp4', 900000), null);
+  assert.equal(classify('https://cdn.example/videoplayback?rn=4', 'video/mp4', 900000), null);
+  assert.equal(classify('https://cdn.example/videoplayback?range=0-100', 'video/mp4', 900000), null);
+  assert.equal(context.youtubePage('https://youtu.be/abcdefghijk'), 'https://www.youtube.com/watch?v=abcdefghijk');
+  assert.equal(context.youtubePage('https://www.youtube.com/shorts/abcdefghijk'), 'https://www.youtube.com/watch?v=abcdefghijk');
+  assert.equal(context.youtubePage('https://youtube.com.evil.example/watch?v=abcdefghijk'), null);
   assert.equal(classify('https://cdn.example/a.ts', 'video/mp2t', 999999), null);
   assert.equal(classify('https://cdn.example/a.m4s', 'video/iso.segment', 999999), null);
   assert.equal(classify('https://cdn.example/a.aac', 'audio/aac', 999999), null);
@@ -119,6 +159,10 @@ const detect = (url, type, length, tabId = 1) => events.headers({ tabId, url, st
   await flush();
   assert.equal(session['tab:1'].media[0].thumb, thumbnail);
   assert.equal(session['tab:1'].media[0].duration, 125);
+  const repeatCounts = { writes, pushes: sent.length, probes };
+  for (let i = 0; i < 20; i++) detect('https://cdn.example/video.mp4?signature=old', 'video/mp4', 900000);
+  await flush();
+  assert.deepEqual({ writes, pushes: sent.length, probes }, repeatCounts, 'identical responses do no extra writes, pushes or probes');
   detect('https://cdn.example/video.mp4?signature=new', 'video/mp4', 400000);
   detect('https://subs.example/caption.es.vtt?token=1', 'text/vtt', 20);
   detect('https://cdn.example/other.webm', 'video/webm', 700000, 2);
@@ -154,7 +198,7 @@ const detect = (url, type, length, tabId = 1) => events.headers({ tabId, url, st
   captureFails = false; jpegBytes = [1, 2, 3];
   await message({ t: 'list', tabId: 5 }); await flush();
   assert.equal(session['tab:5'].media[0].thumb, thumbnail, 'visible capture replaces poster');
-  assert.equal(session['tab:5'].media[0].thumbQuality, 3);
+  assert.equal(session['tab:5'].media[0].thumbQuality, 4);
   captureFails = true; jpegBytes = [7, 8, 9];
   await message({ t: 'list', tabId: 5 }); await flush();
   assert.equal(session['tab:5'].media[0].thumb, thumbnail, 'poster must not replace better capture');
@@ -193,7 +237,7 @@ const detect = (url, type, length, tabId = 1) => events.headers({ tabId, url, st
   assert.equal(captures, beforeReady + 1, 'ready retry captures a decoded frame');
   assert.equal(posterFetches, beforePosterFetch, 'poster must not be fetched when a frame capture succeeds');
   assert.equal(session['tab:7'].media[0].thumb, thumbnail);
-  assert.equal(session['tab:7'].media[0].thumbQuality, 3);
+  assert.equal(session['tab:7'].media[0].thumbQuality, 4);
   assert.ok(sent.some(x => x.url === '/found' && JSON.parse(x.options.body).url.endsWith('/delayed.webm') && JSON.parse(x.options.body).thumb === thumbnail), 'ready thumbnail update is pushed to PastDow');
   assert.equal(timers.has(retryHandles[3]), false, 'remaining retries stop once a good frame exists');
   await message({ t: 'list', tabId: 7 }); await flush();
@@ -202,6 +246,49 @@ const detect = (url, type, length, tabId = 1) => events.headers({ tabId, url, st
   assert.equal(vm.runInContext('previewRetries.has(2)', context), false, 'navigation cancels pending retries');
   detect('https://cdn.example/other.webm', 'video/webm', 700000, 2); await flush();
   posterMode = false; activeTab = 1;
+  // Canvas frames bypass screen capture, including its GPU-overlay black output.
+  activeTab = 8; probe.frame = 'data:image/jpeg;base64,CAkK';
+  const beforeCanvasCapture = captures;
+  detect('https://cdn.example/canvas.webm', 'video/webm', 900000, 8); await flush();
+  assert.equal(captures, beforeCanvasCapture, 'page canvas is preferred to screen capture');
+  assert.equal(session['tab:8'].media[0].thumbQuality, 4);
+  delete probe.frame;
+  activeTab = 9; blackCapture = true; posterMode = true; probe.og = 'https://images.example/official.jpg'; probe.twitter = 'https://images.example/twitter.jpg';
+  const beforeImages = imageRequests.length;
+  detect('https://cdn.example/black.webm', 'video/webm', 900000, 9); await flush();
+  assert.equal(session['tab:9'].media[0].thumbQuality, 1, 'black screen frame rejected; og image is fallback');
+  assert.ok(session['tab:9'].media[0].thumb);
+  assert.deepEqual(imageRequests.slice(beforeImages), ['https://images.example/official.jpg'], 'og image is tried before Twitter and poster');
+  posterMode = false; delete probe.twitter;
+  const beforeThrottle = probes;
+  await context.enrich(9); await context.enrich(9);
+  assert.equal(probes, beforeThrottle, 'probes within 1.5 seconds are suppressed');
+  flatPixels = true; assert.equal(await context.smallJpeg({}), null, 'uniform bright image is rejected'); flatPixels = false;
+  blackFrame = true; assert.equal(await context.smallJpeg({ source: 'frame' }), null, 'black canvas image is rejected'); blackFrame = false;
+  blackCapture = false;
+  probe.readyState = 0; probe.videoWidth = 0;
+  activeTab = 10; tabUrls.set(10, 'https://www.youtube.com/watch?v=abcdefghijk');
+  const beforeYoutube = captures;
+  events.commit({ tabId: 10, frameId: 0 }); await flush();
+  assert.equal(session['tab:10'].media.length, 1); assert.equal(session['tab:10'].media[0].kind, 'PAGE');
+  assert.equal(session['tab:10'].media[0].url, 'https://www.youtube.com/watch?v=abcdefghijk');
+  assert.equal(session['tab:10'].media[0].thumbQuality, 5, 'YouTube og image is preferred immediately');
+  assert.equal(captures, beforeYoutube);
+  const youtubeCounts = { writes, pushes: sent.length, probes };
+  for (let i = 0; i < 20; i++) detect('https://r1.googlevideo.com/videoplayback?range=' + i, 'video/mp4', 900000, 10);
+  events.history({ tabId: 10, frameId: 0 }); await flush();
+  assert.deepEqual({ writes, pushes: sent.length, probes }, youtubeCounts, 'YouTube chunks and unchanged SPA events do no work');
+  const ytId = session['tab:10'].media[0].id;
+  assert.equal((await message({ t: 'download', tabId: 10, id: ytId })).ok, true);
+  const pagePayload = JSON.parse(sent.filter(x => x.url === '/queue').at(-1).options.body);
+  assert.equal(pagePayload.kind, 'PAGE'); assert.equal(pagePayload.cookie, undefined); assert.equal(pagePayload.userAgent, undefined);
+  tabUrls.set(10, 'https://www.youtube.com/shorts/lmnopqrstuv');
+  events.history({ tabId: 10, frameId: 0 }); await flush();
+  assert.equal(session['tab:10'].media.length, 1); assert.equal(session['tab:10'].media[0].url, 'https://www.youtube.com/watch?v=lmnopqrstuv');
+  tabUrls.set(10, 'https://youtu.be/abcdefghijk');
+  events.update(10, { url: tabUrls.get(10) }); await flush();
+  assert.equal(session['tab:10'].media[0].url, 'https://www.youtube.com/watch?v=abcdefghijk');
+  delete probe.og; probe.readyState = 2; probe.videoWidth = 640; activeTab = 1;
   offline = true;
   const fallback = await message({ t: 'download', tabId: 1, id });
   const body = JSON.parse(Buffer.from(fallback.protocol.split('d=')[1], 'base64url').toString());
@@ -225,5 +312,5 @@ const detect = (url, type, length, tabId = 1) => events.headers({ tabId, url, st
   events.navigate({ tabId: 1, frameId: 1 }); await flush(); assert.equal(session['tab:1'].media.length, 1);
   events.navigate({ tabId: 1, frameId: 0 }); await flush(); assert.equal(session['tab:1'], undefined);
   assert.equal(session['tab:2'].media.length, 1);
-  console.log('Extension: readiness gating, scheduled retries, controls crop, fallback-only posters, ready-frame updates, thumbnails, duration, active-tab capture, poster fallback and upgrade, size limit, visible-video selection, capture/script failures, preservation, found/queue payloads, manifest, icons, JavaScript syntax, filters, sizes, subtitles, dedupe, per-tab state, headers, queue, fallback, sealed messages, server proof, auto-pairing, auth rejection and navigation passed');
+  console.log('Extension: YouTube PAGE/SPA and chunks, canvas priority, black/flat rejection, duplicate fast path, probe throttle, readiness gating, scheduled retries, controls crop, fallback-only posters, ready-frame updates, thumbnails, duration, active-tab capture, poster fallback and upgrade, size limit, visible-video selection, capture/script failures, preservation, found/queue payloads, manifest, icons, JavaScript syntax, filters, sizes, subtitles, dedupe, per-tab state, headers, queue, fallback, sealed messages, server proof, auto-pairing, auth rejection and navigation passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

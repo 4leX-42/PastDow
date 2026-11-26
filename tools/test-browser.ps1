@@ -101,6 +101,17 @@ public static class BrowserChecks
             Check((bool)Call(mediaType, media, "Valid"), "bad duration still accepts media");
             Check((double)mediaType.GetProperty("duration").GetValue(media, null) == (duration >= 0 && duration <= 86400 ? duration : 0), "duration validation");
         }
+        object pageMedia = js.Deserialize(js.Serialize(new { url = "https://www.youtube.com/watch?v=abcdefghijk", page = "https://www.youtube.com/watch?v=abcdefghijk", kind = "PAGE", title = "YouTube video" }), mediaType);
+        Check((bool)Call(mediaType, pageMedia, "Valid"), "PAGE media accepted without captured headers");
+        object pageJob = Call(mediaType, pageMedia, "Job", false, 1080, "mkv");
+        Check(!(bool)pageJob.GetType().GetField("Captured", Flags).GetValue(pageJob), "PAGE creates a normal job");
+        Check((string)pageJob.GetType().GetField("Url", Flags).GetValue(pageJob) == "https://www.youtube.com/watch?v=abcdefghijk", "PAGE keeps canonical URL");
+        Check(pageJob.GetType().GetField("Cookie", Flags).GetValue(pageJob) == null && pageJob.GetType().GetField("Referer", Flags).GetValue(pageJob) == null && pageJob.GetType().GetField("UserAgent", Flags).GetValue(pageJob) == null, "PAGE has no captured credentials");
+        Check((int)pageJob.GetType().GetField("MaxHeight", Flags).GetValue(pageJob) == 1080 && (string)pageJob.GetType().GetField("Format", Flags).GetValue(pageJob) == "mkv", "PAGE keeps quality and format");
+        object audioPageJob = Call(mediaType, pageMedia, "Job", true, 0, "mp3");
+        Check((bool)audioPageJob.GetType().GetField("Audio", Flags).GetValue(audioPageJob) && !(bool)audioPageJob.GetType().GetField("Captured", Flags).GetValue(audioPageJob), "PAGE supports normal audio jobs");
+        string pageArgs = (string)Call(T("Runner"), null, "Args", pageJob);
+        Check(!pageArgs.Contains("--load-info-json") && pageArgs.Contains("--embed-subs"), "PAGE uses normal extraction and subtitle options");
         object job = Call(mediaType, media, "Job", false, 1080, "mkv");
         Check((bool)job.GetType().GetField("Captured", Flags).GetValue(job), "captured job");
         string info = (string)Call(T("CapturedMedia"), null, "Info", job);
@@ -155,7 +166,7 @@ public static class BrowserChecks
             Check(Request(listener, receiver, port, "POST", "/msg", "malformed") == 400, "malformed JSON");
         }
         ((IDisposable)receiver).Dispose();
-        Console.WriteLine("Browser: thumbnail and duration validation, header injection, job conversion, direct info JSON, subtitle headers, arguments, protocol auth, sidecar preservation and sealed HTTP endpoint (wrong key, replay, stale, pre-restart, tamper) passed");
+        Console.WriteLine("Browser: PAGE normal jobs, thumbnail and duration validation, header injection, job conversion, direct info JSON, subtitle headers, arguments, protocol auth, sidecar preservation and sealed HTTP endpoint (wrong key, replay, stale, pre-restart, tamper) passed");
         Type instanceType = T("SingleInstance");
         instanceType.GetField("Name", Flags).SetValue(null, "PastDow.Test." + Guid.NewGuid().ToString("N"));
         object first = Activator.CreateInstance(instanceType);
