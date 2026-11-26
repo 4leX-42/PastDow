@@ -197,6 +197,9 @@
   .browser-copy { min-width:0; flex:1; }
   .browser-thumb { position:relative; flex:0 0 72px; width:72px; height:40px; border-radius:4px; overflow:hidden; background:#161616; display:grid; place-items:center; color:#666; }
   .browser-thumb img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  .browser-pencil { position:absolute; right:118px; top:50%; transform:translateY(-50%); font-size:14px; color:var(--mute); padding:4px 6px; opacity:0; transition:opacity .18s, color .18s; }
+  .browser-item:hover .browser-pencil { opacity:1; } .browser-pencil:hover { color:var(--fg); }
+  .browser-rename { position:static; left:auto; top:auto; width:100%; height:auto; background:#111; border:1px solid #333; color:var(--fg); font:14px "Segoe UI Variable Display","Segoe UI",sans-serif; padding:3px 6px; }
   .browser-duration { position:absolute; left:2px; bottom:2px; background:rgba(0,0,0,.78); color:#fff; font-size:9px; line-height:12px; padding:0 3px; border-radius:2px; }
   .browser-copy .sub { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .browser-item .ttl { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -431,6 +434,7 @@ function renderBrowsers(list) {
     btn.onclick = () => { box.querySelectorAll('button').forEach(x => x.disabled = true); $('browserStatus').textContent = 'Opening ' + b.name + '…';
       send({ t: 'installExt', browser: b.id }); }; box.append(btn); });
 }
+const foundNames = {};   // id -> name typed with the pencil
 function renderFound(items) {
   $('foundCount').textContent = items.length || '';
   $('foundEmpty').hidden = items.length > 0;
@@ -439,8 +443,8 @@ function renderFound(items) {
   items.forEach(item => {
     const row = document.createElement('button'); row.className = 'browser-item';
     const title = document.createElement('div'), sub = document.createElement('div'); title.className = 'ttl'; sub.className = 'sub';
-    title.textContent = item.title || 'Browser video';
-    sub.textContent = [item.kind, item.size ? (item.size / 1048576).toFixed(1) + ' MB' : 'SIZE UNKNOWN', item.host, item.subtitles ? item.subtitles + (item.subtitles === 1 ? ' SUBTITLE' : ' SUBTITLES') : ''].filter(Boolean).join(' · ');
+    title.textContent = foundNames[item.id] || item.title || 'Browser video';
+    sub.textContent = [item.kind === 'PAGE' ? 'VIDEO PAGE' : item.kind, item.kind === 'HLS' || item.kind === 'DASH' ? 'STREAM' : item.kind === 'PAGE' ? '' : item.size ? (item.size / 1048576).toFixed(1) + ' MB' : 'SIZE UNKNOWN', item.host, item.subtitles ? item.subtitles + (item.subtitles === 1 ? ' SUBTITLE' : ' SUBTITLES') : ''].filter(Boolean).join(' · ');
     const preview = document.createElement('div'); preview.className = 'browser-thumb'; preview.textContent = '\u25b6';
     if (item.thumb) { const image = document.createElement('img'); image.src = item.thumb; image.alt = ''; image.onerror = () => image.remove(); preview.append(image); }
     if (item.duration > 0) {
@@ -449,8 +453,20 @@ function renderFound(items) {
       badge.textContent = (seconds >= 3600 ? Math.floor(seconds / 3600) + ':' + String(minutes % 60).padStart(2, '0') : minutes) + ':' + String(seconds % 60).padStart(2, '0'); preview.append(badge);
     }
     const copy = document.createElement('div'); copy.className = 'browser-copy'; copy.append(title, sub);
-    row.append(preview, copy); row.onclick = () => {
-      send({ t: 'foundQueue', id: item.id, mode: st.mode, q: st.q, fmt: st.mode === 'audio' ? st.afmt : st.vfmt }); toast('BROWSER VIDEO ADDED');
+    // pencil: rename before downloading (a span, the whole row is already a button)
+    const pencil = document.createElement('span'); pencil.className = 'browser-pencil'; pencil.textContent = '\u270e'; pencil.title = 'Rename before downloading';
+    pencil.onclick = e => {
+      e.stopPropagation();
+      const input = document.createElement('input'); input.className = 'browser-rename'; input.value = title.textContent; input.maxLength = 200;
+      const done = keep => { if (keep && input.value.trim()) foundNames[item.id] = input.value.trim(); title.textContent = foundNames[item.id] || title.textContent; input.replaceWith(title); };
+      input.onclick = ev => ev.stopPropagation();
+      input.onkeydown = ev => { ev.stopPropagation(); if (ev.key === 'Enter') { ev.preventDefault(); done(true); } if (ev.key === 'Escape') done(false); };
+      input.onkeyup = ev => ev.preventDefault();
+      input.onblur = () => done(true);
+      title.replaceWith(input); input.focus(); input.select();
+    };
+    row.append(preview, copy, pencil); row.onclick = () => {
+      send({ t: 'foundQueue', id: item.id, mode: st.mode, q: st.q, fmt: st.mode === 'audio' ? st.afmt : st.vfmt, name: foundNames[item.id] || '' }); toast('BROWSER VIDEO ADDED');
     };
     $('foundItems').append(row);
   });

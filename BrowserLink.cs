@@ -25,6 +25,7 @@ namespace PastDow
         public string kind { get; set; }
         public long size { get; set; }
         public string thumb { get; set; }
+        public string name { get; set; }   // set with the pencil in the popup: file name chosen by the user
         public double duration { get; set; }
         public string page { get; set; }
         public string title { get; set; }
@@ -37,8 +38,16 @@ namespace PastDow
         public static bool Http(string value) => Uri.TryCreate(value, UriKind.Absolute, out var u) && (u.Scheme == "http" || u.Scheme == "https") && string.IsNullOrEmpty(u.UserInfo);
         static bool Header(string value) => value == null || (value.Length <= 65536 && !value.Any(c => c < 32 || c == 127));
 
+        /// <summary>A user-chosen file name: trimmed, at most 200 characters, no control characters; otherwise none.</summary>
+        public static string CleanName(string n)
+        {
+            n = n?.Trim();
+            return string.IsNullOrEmpty(n) || n.Length > 200 || n.Any(char.IsControl) ? null : n;
+        }
+
         public bool Valid()
         {
+            name = CleanName(name);
             if (thumb != null && (thumb.Length > 120000 || !Regex.IsMatch(thumb,
                 @"\Adata:image/(?:jpeg|png);base64,(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?\z"))) thumb = null;
             if (double.IsNaN(duration) || duration < 0 || duration > 86400) duration = 0;
@@ -50,10 +59,10 @@ namespace PastDow
 
         public Job Job(bool audio, int height, string format) => kind == "PAGE" ? new Job
         {
-            Url = url, Title = title, Audio = audio, MaxHeight = height, Format = format
+            Url = url, Title = name ?? title, CustomName = name, Audio = audio, MaxHeight = height, Format = format
         } : new Job
         {
-            Url = url, Page = page, Referer = page, Title = title, UserAgent = userAgent, Cookie = cookie,
+            Url = url, Page = page, Referer = page, Title = name ?? title, CustomName = name, UserAgent = userAgent, Cookie = cookie,
             Captured = true, Audio = audio, MaxHeight = height, Format = format, MediaKind = kind,
             Subtitles = subtitles.Select(s => new BrowserSubtitle { url = s.url, lang = s.lang ?? "und", cookie = s.cookie, ext = s.ext }).ToList()
         };

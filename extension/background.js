@@ -416,6 +416,9 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       const data = await state(message.tabId), item = data.media.find(x => x.id === message.id);
       if (!item) throw new Error('This page changed, play the video again');
       const body = await payload(item, data, message.tabId);
+      // renamed with the pencil in the popup: PastDow saves the file with exactly this name
+      const name = String(message.name || '').trim().slice(0, 200);
+      if (name) body.name = name;
       const key = await storedKey();
       if (!key) throw new Error('Paste your PastDow pairing key first');
       try { await request('queue', body); return { ok: true }; }

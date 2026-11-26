@@ -247,7 +247,7 @@ namespace PastDow
                 case "foundQueue":
                     {
                         var media = found.FirstOrDefault(x => x.Key == I("id")).Value;
-                        if (media != null) QueueFound(media, S("mode") == "audio", I("q"), S("fmt"));
+                        if (media != null) QueueFound(media, S("mode") == "audio", I("q"), S("fmt"), S("name"));
                         break;
                     }
                 case "browserKey": try { Clipboard.SetText(Settings.BrowserKey); lastClip = Settings.BrowserKey; } catch { } break;
@@ -301,6 +301,7 @@ namespace PastDow
                                     Captured = true, Subtitles = j.Subtitles, MediaKind = j.MediaKind, Audio = j.Audio, MaxHeight = j.MaxHeight, Format = j.Format }
                                 : new Job { Url = j.Url, Audio = j.Audio, MaxHeight = j.MaxHeight, Format = j.Format, Title = j.Title, ForceCapture = j.ForceCapture };
                             retry.Force = true;
+                            retry.CustomName = j.CustomName; if (j.CustomName != null) retry.Title = j.CustomName;
                             jobs[jobs.IndexOf(j)] = retry;
                             Pump();
                         }
@@ -375,11 +376,14 @@ namespace PastDow
             PushFound();
         }
 
-        void QueueFound(BrowserMedia media, bool audio, int q, string fmt)
+        void QueueFound(BrowserMedia media, bool audio, int q, string fmt, string name = null)
         {
             if (audio ? !Settings.AudioFormats.Contains(fmt) : !Settings.VideoFormats.Contains(fmt)) fmt = audio ? Settings.AudioFormat : Settings.VideoFormat;
             if (!new[] { 0, 720, 1080, 1440, 2160 }.Contains(q)) q = 0;
-            jobs.Add(media.Job(audio, audio ? 0 : q, fmt));
+            var job = media.Job(audio, audio ? 0 : q, fmt);
+            string chosen = BrowserMedia.CleanName(name);
+            if (chosen != null) { job.CustomName = chosen; job.Title = chosen; }
+            jobs.Add(job);
             Pump();
         }
 
