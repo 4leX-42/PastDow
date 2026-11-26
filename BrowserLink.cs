@@ -48,7 +48,10 @@ namespace PastDow
                 Regex.IsMatch(s.lang ?? "und", @"^[a-zA-Z0-9-]{1,20}$") && (s.ext == null || s.ext == "srt" || s.ext == "vtt"));
         }
 
-        public Job Job(bool audio, int height, string format) => new Job
+        public Job Job(bool audio, int height, string format) => kind == "PAGE" ? new Job
+        {
+            Url = url, Title = title, Audio = audio, MaxHeight = height, Format = format
+        } : new Job
         {
             Url = url, Page = page, Referer = page, Title = title, UserAgent = userAgent, Cookie = cookie,
             Captured = true, Audio = audio, MaxHeight = height, Format = format, MediaKind = kind,

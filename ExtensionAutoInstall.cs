@@ -42,7 +42,11 @@ namespace PastDow
                 omni.SetFocus();
                 ((ValuePattern)vp).SetValue(b.Page);
                 Thread.Sleep(250);
-                Key(0x0D);   // Enter
+                // Enter as window messages to that frame: a synthesized key press only reaches the foreground
+                // window, and Windows does not let PastDow bring an already running browser to the front
+                PostMessage(hwnd, 0x0100 /* WM_KEYDOWN */, (IntPtr)0x0D, (IntPtr)0x001C0001);
+                PostMessage(hwnd, 0x0102 /* WM_CHAR */, (IntPtr)0x0D, (IntPtr)0x001C0001);
+                PostMessage(hwnd, 0x0101 /* WM_KEYUP */, (IntPtr)0x0D, unchecked((IntPtr)(int)0xC01C0001));
 
                 step("Turning on Developer mode");
                 // Chrome puts id="devMode" on the toggle itself; Brave on a wrapper with the toggle inside
@@ -120,9 +124,7 @@ namespace PastDow
         [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr h, int m, IntPtr w, string l);
         [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr h, int m, IntPtr w, IntPtr l);
-        [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
-
-        static void Key(byte vk) { keybd_event(vk, 0, 0, UIntPtr.Zero); keybd_event(vk, 0, 2 /* KEYUP */, UIntPtr.Zero); }
+        [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, int m, IntPtr w, IntPtr l);
 
         static string Cls(IntPtr h) { var s = new StringBuilder(128); GetClassName(h, s, 128); return s.ToString(); }
         static string Title(IntPtr h) { var s = new StringBuilder(256); GetWindowText(h, s, 256); return s.ToString(); }
