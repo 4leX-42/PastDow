@@ -146,25 +146,27 @@
   .savebox .sup2 { transition:color .3s; } .savebox:hover .sup2 { color:var(--fg); }
   .chg { margin-left:14px; color:var(--fg); opacity:0; transition:opacity .3s, margin-left .4s var(--ease); }
   .savebox:hover .chg { opacity:1; margin-left:18px; }
-  .open { position:absolute; right:44px; bottom:26px; display:flex; align-items:center; gap:18px; font-size:11.5px; letter-spacing:.3em; color:var(--sub); font-weight:400; transition:color .3s; }
-  .open i { width:1px; height:22px; background:#2c2c2c; }
-  .open:hover { color:var(--fg); }
+  .open-folder { position:absolute; right:44px; bottom:26px; display:flex; align-items:center; gap:18px; font-size:11.5px; letter-spacing:.3em; color:var(--sub); font-weight:400; transition:color .3s; }
+  .open-folder i { width:1px; height:22px; background:#2c2c2c; }
+  .open-folder:hover { color:var(--fg); }
 
   /* side menu */
   .side { position:absolute; top:0; right:0; bottom:0; width:390px; background:#050506; border-left:1px solid #1c1c1c; z-index:5;
-          /* closed: a breeze carries it off, a short drift, fading and softening as it speeds up */
-          opacity:0; transform:translateX(28px); filter:blur(6px); visibility:hidden; pointer-events:none;
-          transition:opacity .38s cubic-bezier(.3,.1,.55,1), transform .4s cubic-bezier(.3,0,.6,.8), filter .38s cubic-bezier(.3,.1,.6,1), box-shadow .3s, visibility 0s linear .42s;
+          /* closed: the panel fades out as one piece with a short drift; no blur (costly, and it re-rasterises the
+             text, which reads as the letters jumping) and no per-row motion. The layer is kept ready (will-change)
+             so the first opening does not stutter */
+          opacity:0; transform:translate3d(16px,0,0); visibility:hidden; pointer-events:none; will-change:opacity, transform;
+          transition:opacity .32s cubic-bezier(.4,0,.2,1), transform .36s cubic-bezier(.4,0,.2,1), box-shadow .3s, visibility 0s linear .36s;
           padding:92px 48px 26px; display:flex; flex-direction:column; align-items:flex-start; text-align:left; overflow-y:auto; overflow-x:hidden; }
   .side::-webkit-scrollbar { width:2px; } .side::-webkit-scrollbar-thumb { background:#2a2a2a; }
-  .side.open { opacity:1; transform:none; filter:none; visibility:visible; pointer-events:auto; box-shadow:-40px 0 80px rgba(0,0,0,.6);
-               transition:opacity .45s ease-out, transform .7s var(--ease), filter .55s ease-out, box-shadow .6s, visibility 0s; }
+  .side.open { opacity:1; transform:translate3d(0,0,0); visibility:visible; pointer-events:auto; box-shadow:-40px 0 80px rgba(0,0,0,.6);
+               transition:opacity .34s cubic-bezier(.2,0,0,1), transform .5s cubic-bezier(.2,0,0,1), box-shadow .5s, visibility 0s; }
   .side h6 { font-weight:400; font-size:11px; letter-spacing:.3em; color:var(--dim); margin-bottom:20px; }
   .side .it { display:block; width:100%; text-align:left; margin-bottom:15px; letter-spacing:normal;
-              opacity:0; transform:translateX(20px); transition:opacity .5s, transform .6s var(--ease); }
-  .side.open .it { opacity:1; transform:none; }
-  /* leaving: every row goes at once (the opening stagger would make them linger), slightly ahead of the panel */
-  .side:not(.open) .it { transition:opacity .24s cubic-bezier(.3,.1,.55,1), transform .34s cubic-bezier(.55,0,.85,.4) !important; transition-delay:0s !important; transform:translateX(12px); }
+              opacity:0; transition:opacity .4s ease-out; }
+  .side.open .it { opacity:1; }
+  /* leaving: rows stay put and simply go with the panel (no stagger, no own motion) */
+  .side:not(.open) .it { transition:none !important; opacity:1; }
   .side .it b { display:block; font-weight:400; font-size:15px; letter-spacing:.22em; color:var(--fg); transition:letter-spacing .4s var(--ease); }
   .side .it:hover b { letter-spacing:.28em; }
   .side .it em { display:block; font-style:normal; font-size:12.5px; letter-spacing:.01em; color:var(--sub); margin-top:5px;
@@ -304,7 +306,7 @@
   <div class="sup intro" style="animation-delay:.6s">SAVING TO<span class="chg">CHANGE</span></div>
   <div class="sup2 intro" style="animation-delay:.65s" id="saving"></div>
   </div>
-  <button class="open intro" style="animation-delay:.7s" id="open"><svg width="18" height="14" viewBox="0 0 18 14" fill="none" stroke="currentColor" stroke-width="1"><path d="M.5 2.5v10h17v-9H8L6.5 1.5h-6z"/></svg><i></i>OPEN FOLDER</button>
+  <button class="open-folder intro" style="animation-delay:.7s" id="open"><svg width="18" height="14" viewBox="0 0 18 14" fill="none" stroke="currentColor" stroke-width="1"><path d="M.5 2.5v10h17v-9H8L6.5 1.5h-6z"/></svg><i></i>OPEN FOLDER</button>
 
   <div class="side" id="side">
     <button class="x" id="closeMenu">CLOSE</button>
