@@ -152,13 +152,19 @@
 
   /* side menu */
   .side { position:absolute; top:0; right:0; bottom:0; width:390px; background:#050506; border-left:1px solid #1c1c1c; z-index:5;
-          transform:translateX(100%); transition:transform .7s var(--ease); padding:92px 48px 26px; display:flex; flex-direction:column; align-items:flex-start; text-align:left; overflow-y:auto; overflow-x:hidden; }
+          /* closed: a breeze carries it off, a short drift, fading and softening as it speeds up */
+          opacity:0; transform:translateX(28px); filter:blur(6px); visibility:hidden; pointer-events:none;
+          transition:opacity .38s cubic-bezier(.3,.1,.55,1), transform .4s cubic-bezier(.3,0,.6,.8), filter .38s cubic-bezier(.3,.1,.6,1), box-shadow .3s, visibility 0s linear .42s;
+          padding:92px 48px 26px; display:flex; flex-direction:column; align-items:flex-start; text-align:left; overflow-y:auto; overflow-x:hidden; }
   .side::-webkit-scrollbar { width:2px; } .side::-webkit-scrollbar-thumb { background:#2a2a2a; }
-  .side.open { transform:none; box-shadow:-40px 0 80px rgba(0,0,0,.6); }
+  .side.open { opacity:1; transform:none; filter:none; visibility:visible; pointer-events:auto; box-shadow:-40px 0 80px rgba(0,0,0,.6);
+               transition:opacity .45s ease-out, transform .7s var(--ease), filter .55s ease-out, box-shadow .6s, visibility 0s; }
   .side h6 { font-weight:400; font-size:11px; letter-spacing:.3em; color:var(--dim); margin-bottom:20px; }
   .side .it { display:block; width:100%; text-align:left; margin-bottom:15px; letter-spacing:normal;
               opacity:0; transform:translateX(20px); transition:opacity .5s, transform .6s var(--ease); }
   .side.open .it { opacity:1; transform:none; }
+  /* leaving: every row goes at once (the opening stagger would make them linger), slightly ahead of the panel */
+  .side:not(.open) .it { transition:opacity .24s cubic-bezier(.3,.1,.55,1), transform .34s cubic-bezier(.55,0,.85,.4) !important; transition-delay:0s !important; transform:translateX(12px); }
   .side .it b { display:block; font-weight:400; font-size:15px; letter-spacing:.22em; color:var(--fg); transition:letter-spacing .4s var(--ease); }
   .side .it:hover b { letter-spacing:.28em; }
   .side .it em { display:block; font-style:normal; font-size:12.5px; letter-spacing:.01em; color:var(--sub); margin-top:5px;
