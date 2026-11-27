@@ -45,11 +45,13 @@ namespace PastDow
             return string.IsNullOrEmpty(n) || n.Length > 200 || n.Any(char.IsControl) ? null : n;
         }
 
+        public static string CleanThumb(string value) => value != null && value.Length <= 120000 && Regex.IsMatch(value,
+            @"\Adata:image/(?:jpeg|png);base64,(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?\z") ? value : null;
+
         public bool Valid()
         {
             name = CleanName(name);
-            if (thumb != null && (thumb.Length > 120000 || !Regex.IsMatch(thumb,
-                @"\Adata:image/(?:jpeg|png);base64,(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?\z"))) thumb = null;
+            thumb = CleanThumb(thumb);
             if (double.IsNaN(duration) || duration < 0 || duration > 86400) duration = 0;
             return Http(url) && Http(page) && Header(userAgent) && Header(cookie) &&
             (title?.Length ?? 0) <= 4096 && (kind?.Length ?? 0) <= 40 && size >= 0 &&
@@ -59,10 +61,10 @@ namespace PastDow
 
         public Job Job(bool audio, int height, string format) => kind == "PAGE" ? new Job
         {
-            Url = url, Title = name ?? title, CustomName = name, Audio = audio, MaxHeight = height, Format = format
+            Url = url, Thumb = CleanThumb(thumb), Page = page, Title = name ?? title, CustomName = name, Audio = audio, MaxHeight = height, Format = format
         } : new Job
         {
-            Url = url, Page = page, Referer = page, Title = name ?? title, CustomName = name, UserAgent = userAgent, Cookie = cookie,
+            Url = url, Thumb = CleanThumb(thumb), Page = page, Referer = page, Title = name ?? title, CustomName = name, UserAgent = userAgent, Cookie = cookie,
             Captured = true, Audio = audio, MaxHeight = height, Format = format, MediaKind = kind,
             Subtitles = subtitles.Select(s => new BrowserSubtitle { url = s.url, lang = s.lang ?? "und", cookie = s.cookie, ext = s.ext }).ToList()
         };
@@ -97,6 +99,9 @@ namespace PastDow
         readonly HttpListener listener = new HttpListener();
         readonly Func<BrowserMedia, bool, Task> receive;
         public BrowserLink(Func<BrowserMedia, bool, Task> receive) { this.receive = receive; }
+
+        public DownloadHistory History;
+        public Func<string, Task<bool>> Reveal;
 
         public void Start()
         {
@@ -158,6 +163,17 @@ namespace PastDow
                     media.key = null;
                     await receive(media, plain.op == "queue").ConfigureAwait(false);
                 }
+                else if (plain.op == "history" || plain.op == "reveal")
+                {
+                    var data = new Dictionary<string, object>();
+                    if (plain.op == "history") data["items"] = History?.Items() ?? new object[0];
+                    else data["ok"] = History != null && Reveal != null && await Reveal(plain.id).ConfigureAwait(false);
+                    string proof = Sealed.DataProof(plain.nonce, data);
+                    data["proof"] = proof;
+                    byte[] result = Encoding.UTF8.GetBytes(new JavaScriptSerializer { MaxJsonLength = 33554432 }.Serialize(data));
+                    await res.OutputStream.WriteAsync(result, 0, result.Length).ConfigureAwait(false);
+                    return;
+                }
                 else if (plain.op != "ping") { res.StatusCode = 400; return; }
                 byte[] bytes = Encoding.UTF8.GetBytes("{\"proof\":\"" + Sealed.Proof(plain.nonce) + "\"}");
                 await res.OutputStream.WriteAsync(bytes, 0, bytes.Length).ConfigureAwait(false);
@@ -169,6 +185,7 @@ namespace PastDow
         sealed class Message
         {
             public string op { get; set; }
+            public string id { get; set; }
             public long ts { get; set; }
             public string nonce { get; set; }
             public BrowserMedia media { get; set; }
@@ -232,6 +249,40 @@ namespace PastDow
                 seen[nonce] = now;
                 return true;
             }
+        }
+
+        // Canonical JSON: ordinal sorted object keys, ordered arrays, integer numbers, ASCII strings
+        // with non-ASCII/control UTF-16 units escaped as lower-case \uXXXX. Matches background.js.
+        public static string Canonical(object value)
+        {
+            var json = new JavaScriptSerializer { MaxJsonLength = 33554432 };
+            return CanonicalValue(json.DeserializeObject(json.Serialize(value)));
+        }
+
+        static string CanonicalValue(object value)
+        {
+            if (value == null) return "null";
+            if (value is string text)
+            {
+                var b = new StringBuilder("\"");
+                foreach (char c in text)
+                    if (c == '\\' || c == '"') b.Append('\\').Append(c);
+                    else if (c < 32 || c > 126) b.Append("\\u").Append(((int)c).ToString("x4"));
+                    else b.Append(c);
+                return b.Append('"').ToString();
+            }
+            if (value is Dictionary<string, object> map)
+                return "{" + string.Join(",", map.Keys.OrderBy(k => k, StringComparer.Ordinal).Select(k => CanonicalValue(k) + ":" + CanonicalValue(map[k]))) + "}";
+            if (value is System.Collections.IEnumerable list)
+                return "[" + string.Join(",", list.Cast<object>().Select(CanonicalValue)) + "]";
+            if (value is bool flag) return flag ? "true" : "false";
+            return Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        public static string DataProof(string nonce, object data)
+        {
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+                return Hex(Mac("pastdow-ok:" + nonce + ":" + Hex(sha.ComputeHash(Encoding.UTF8.GetBytes(Canonical(data))))));
         }
 
         public static string Proof(string nonce) => Hex(Mac("pastdow-ok:" + nonce));

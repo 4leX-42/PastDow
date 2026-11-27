@@ -18,6 +18,7 @@ const timers = new Map(); let timerId = 0, posterFetches = 0;
 const probe = { readyState: 2, videoWidth: 640, videoHeight: 360, currentTime: 1, paused: false, controls: false };
 let captureFails = false, activeTab = 1, captures = 0, scriptFails = false, posterMode = false, jpegBytes = [1, 2, 3];
 const thumbnail = 'data:image/jpeg;base64,AQID';
+let tamperData = false;
 let offline = false, reject = false, impostor = false, pairingFile = null;
 const nodeCrypto = require('node:crypto');
 const storage = data => ({
@@ -79,9 +80,24 @@ const context = vm.createContext({ Date: Clock,
     const decipher = nodeCrypto.createDecipheriv('aes-256-cbc', derive('pastdow-enc'), Buffer.from(env.iv, 'hex'));
     const msg = JSON.parse(Buffer.concat([decipher.update(Buffer.from(env.ct, 'base64')), decipher.final()]).toString());
     assert.ok(Math.abs(now - msg.ts) < 5000); assert.match(msg.nonce, /^[a-f0-9]{32}$/);
-    sent.push({ url: '/' + msg.op, options: { body: JSON.stringify(msg.media || {}) } });
-    const proof = nodeCrypto.createHmac('sha256', macKey).update('pastdow-ok:' + msg.nonce).digest('hex');
-    return { ok: true, status: 200, json: async () => ({ proof }) };
+    sent.push({ url: '/' + msg.op, options: { body: JSON.stringify(msg.media || {}), id: msg.id } });
+    const data = msg.op === 'history' ? { items: [{ id: '1'.repeat(32), title: 'Clip \u00f1 \ud83c\udfac <&> "\\\n', name: 'clip.mp4', size: 456, date: '2026-11-27T10:00:00.0000000Z', audio: false, thumb: thumbnail, exists: true }] }
+      : msg.op === 'reveal' ? { ok: msg.id === '1'.repeat(32) } : {};
+    // Independent canonicalizer: JSON quotes ASCII; normalize short control escapes and UTF-16 units.
+    const canonical = value => {
+      if (typeof value === 'string') return JSON.stringify(value).replace(/\\[bfnrt]|[\x7f-\uffff]/g, c => {
+        const code = c.length === 2 ? ({ b: 8, f: 12, n: 10, r: 13, t: 9 })[c[1]] : c.charCodeAt(0);
+        return '\\u' + code.toString(16).padStart(4, '0');
+      });
+      if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
+      if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map(k => canonical(k) + ':' + canonical(value[k])).join(',') + '}';
+      return JSON.stringify(value);
+    };
+    const suffix = ['history', 'reveal'].includes(msg.op) ? ':' + nodeCrypto.createHash('sha256').update(canonical(data)).digest('hex') : '';
+    const proof = nodeCrypto.createHmac('sha256', macKey).update('pastdow-ok:' + msg.nonce + suffix).digest('hex');
+    if (tamperData && msg.op === 'history') data.items[0].title = 'forged title';
+    if (tamperData && msg.op === 'reveal') data.ok = !data.ok;
+    return { ok: true, status: 200, json: async () => ({ proof, ...data }) };
   } });
 const source = fs.readFileSync(path.join(root, 'extension/background.js'), 'utf8');
 // Assertions involving VM arrays compare values rather than cross-realm prototypes.
@@ -100,7 +116,62 @@ const flush = async () => {
 };
 const detect = (url, type, length, tabId = 1) => events.headers({ tabId, url, statusCode: 200, responseHeaders: [
   { name: 'Content-Type', value: type }, { name: 'Content-Length', value: String(length) }] });
+// Popup behavior in an isolated DOM double: no browser profile or visible windows.
+async function popupChecks() {
+  class Element {
+    constructor(tag) { this.tag = tag; this.children = []; this.hidden = false; this.attributes = {}; this.textContent = ''; this.disabled = false;
+      this.classList = { toggle: (name, value) => { this[name] = value; } }; }
+    append(...nodes) { this.children.push(...nodes); }
+    replaceChildren(...nodes) { this.children = nodes; }
+    setAttribute(name, value) { this.attributes[name] = value; }
+  }
+  const elements = Object.fromEntries(['pair', 'repair', 'key', 'status', 'items', 'history', 'foundTab', 'historyTab', 'foot'].map(id => [id, new Element(id)]));
+  const calls = [], prefs = {}, listeners = [];
+  let unavailable = false;
+  const item = { id: '1'.repeat(32), title: 'A very long title '.repeat(20), name: 'a'.repeat(200) + '.mp4', size: 100, date: new Date().toISOString(), audio: true, exists: false };
+  const popup = vm.createContext({ document: { getElementById: id => elements[id], createElement: tag => new Element(tag), createElementNS: (ns, tag) => new Element(tag) }, URL,
+    chrome: { tabs: { query: async () => [{ id: 1 }] }, storage: { local: { get: async () => prefs, set: async data => Object.assign(prefs, data) }, onChanged: { addListener: fn => listeners.push(fn) } },
+      runtime: { sendMessage: async body => { calls.push(body); if (body.t === 'history') return unavailable ? { error: 'offline' } : { items: [item] }; if (body.t === 'reveal') return { ok: true }; return { paired: true, items: [] }; } } } });
+  vm.runInContext(fs.readFileSync(path.join(root, 'extension/popup.js'), 'utf8'), popup);
+  await new Promise(setImmediate);
+  assert.equal(calls.filter(c => c.t === 'history').length, 0, 'history is lazy');
+  await vm.runInContext("selectTab('history')", popup);
+  assert.equal(prefs.lastTab, 'history'); assert.equal(elements.items.hidden, true); assert.equal(elements.history.hidden, false);
+  assert.equal(elements.history.children.length, 1);
+  const row = elements.history.children[0], text = row.children[1];
+  assert.equal(row.missing, true); assert.equal(row.children[0].textContent, '\u266b');
+  assert.ok(text.children.some(c => c.textContent === 'File moved or deleted'));
+  const folder = text.children.at(-1); await folder.onclick();
+  assert.equal(calls.at(-1).t, 'reveal'); assert.equal(calls.at(-1).id, item.id);
+  assert.equal(elements.status.textContent, 'Opened in Explorer');
+  const requests = calls.filter(c => c.t === 'history').length;
+  listeners[0]({ 'tab:1': {} }, 'session'); await new Promise(setImmediate);
+  assert.equal(calls.filter(c => c.t === 'history').length, requests, 'detections do not reload history');
+  unavailable = true; await vm.runInContext('loadHistory()', popup);
+  assert.equal(elements.status.textContent, 'Open PastDow to see your downloads'); assert.equal(elements.history.children.length, 0);
+  await vm.runInContext("selectTab('found')", popup); assert.equal(prefs.lastTab, 'found');
+  prefs.lastTab = 'history'; unavailable = false; calls.length = 0;
+  vm.runInNewContext(fs.readFileSync(path.join(root, 'extension/popup.js'), 'utf8'), { document: popup.document, chrome: popup.chrome, URL });
+  await new Promise(setImmediate);
+  assert.equal(calls[0].t, 'history', 'last tab restored');
+  assert.equal(vm.runInContext("relativeDate(new Date(Date.now() - 2 * 3600000).toISOString())", popup).length > 0, true);
+}
 (async () => {
+  await popupChecks();
+  const history = await message({ t: 'history' });
+  assert.equal(history.items.length, 1); assert.equal(history.items[0].name, 'clip.mp4');
+  assert.equal(history.items[0].file, undefined);
+  assert.equal((await message({ t: 'reveal', id: history.items[0].id })).ok, true);
+  assert.equal(sent.filter(x => x.url === '/reveal').at(-1).options.id, history.items[0].id);
+  assert.equal((await message({ t: 'reveal', id: '2'.repeat(32) })).ok, false);
+  const beforeInvalid = wire.length;
+  assert.match((await message({ t: 'reveal', id: '../clip.mp4' })).error, /Invalid history id/);
+  assert.equal(wire.length, beforeInvalid);
+  tamperData = true;
+  const forged = await message({ t: 'history' }); assert.match(forged.error, /rejected/); assert.equal(forged.items, undefined);
+  assert.match((await message({ t: 'reveal', id: history.items[0].id })).error, /rejected/);
+  tamperData = false;
+  assert.equal((await message({ t: 'history' })).items.length, 1);
   const fakeVideo = (width, height, duration, visibility = 'visible') => ({
     getBoundingClientRect: () => ({ left: 10, top: 20, right: 10 + width, bottom: 20 + height, width, height }),
     ...probe, hasAttribute: () => true, duration, poster: 'https://images.example/poster.jpg', style: { display: 'block', visibility, opacity: '1' }
@@ -315,5 +386,6 @@ const detect = (url, type, length, tabId = 1) => events.headers({ tabId, url, st
   events.navigate({ tabId: 1, frameId: 1 }); await flush(); assert.equal(session['tab:1'].media.length, 1);
   events.navigate({ tabId: 1, frameId: 0 }); await flush(); assert.equal(session['tab:1'], undefined);
   assert.equal(session['tab:2'].media.length, 1);
+  console.log('History: popup tabs, lazy load, saved tab, missing-file card, folder action, offline state, verified response, no paths, reveal by id, unknown/invalid ids, tampered items and ok rejected');
   console.log('Extension: YouTube PAGE/SPA and chunks, canvas priority, black/flat rejection, duplicate fast path, probe throttle, readiness gating, scheduled retries, controls crop, fallback-only posters, ready-frame updates, thumbnails, duration, active-tab capture, poster fallback and upgrade, size limit, visible-video selection, capture/script failures, preservation, found/queue payloads, manifest, icons, JavaScript syntax, filters, sizes, subtitles, dedupe, per-tab state, headers, queue, fallback, sealed messages, server proof, rename, auto-pairing, auth rejection and navigation passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

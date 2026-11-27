@@ -20,6 +20,8 @@ into the extension popup and press **PAIR**.
 
 ## Use
 
+**HISTORY** shows recent downloads; **FOLDER** selects the file in Windows Explorer.
+
 Detected videos show a thumbnail and duration when the page makes them available.
 
 Play the video. The icon shows how many videos it found in that tab, and each one also appears at once in
@@ -42,5 +44,5 @@ The extension needs access to all sites to see what a page loads and to read the
 It sends them only to PastDow on this PC (`http://127.0.0.1:47821`), and never in clear: each message is encrypted
 and signed with keys derived from the pairing key, which itself never travels. Another program on that port sees
 only ciphertext, and PastDow has to sign its answer, so the extension notices and stops.
-The extension keeps nothing after the tab closes. A `pastdow:` link carries the same cookies and the key: do not share it.
+Detections are cleared when the tab closes; download history stays locally in PastDow. A `pastdow:` link carries the same cookies and the key: do not share it.
 Download only what you have the right to.

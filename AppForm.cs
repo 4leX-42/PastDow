@@ -32,6 +32,7 @@ namespace PastDow
         readonly List<KeyValuePair<int, BrowserMedia>> found = new List<KeyValuePair<int, BrowserMedia>>();
         readonly List<string> pendingArgs = new List<string>();
         BrowserLink browser;
+        readonly DownloadHistory history = new DownloadHistory(Settings.Home);
         int nextFound;
         string browserStatus = "";
         readonly System.Windows.Forms.Timer push = new System.Windows.Forms.Timer { Interval = 120 };
@@ -115,6 +116,15 @@ namespace PastDow
                     catch (Exception ex) { completion.SetException(ex); }
                     return completion.Task;
                 });
+                browser.History = history;
+                browser.Reveal = id =>
+                {
+                    var completion = new TaskCompletionSource<bool>();
+                    try { BeginInvoke((Action)(() => completion.SetResult(history.Reveal(id, (dir, file) =>
+                        Process.Start("explorer.exe", file != null ? "/select,\"" + file + "\"" : "\"" + dir + "\""))))); }
+                    catch (Exception ex) { completion.SetException(ex); }
+                    return completion.Task;
+                };
                 browser.Start();
             }
             catch (Exception ex) { browserStatus = "Browser connection unavailable: " + ex.Message; }
@@ -300,6 +310,8 @@ namespace PastDow
                                 ? new Job { Url = j.Url, Page = j.Page, Referer = j.Referer, UserAgent = j.UserAgent, Cookie = j.Cookie, Title = j.Title,
                                     Captured = true, Subtitles = j.Subtitles, MediaKind = j.MediaKind, Audio = j.Audio, MaxHeight = j.MaxHeight, Format = j.Format }
                                 : new Job { Url = j.Url, Audio = j.Audio, MaxHeight = j.MaxHeight, Format = j.Format, Title = j.Title, ForceCapture = j.ForceCapture };
+                            retry.Thumb = fresh?.thumb ?? j.Thumb;
+                            retry.Page = j.Page;
                             retry.Force = true;
                             retry.CustomName = j.CustomName; if (j.CustomName != null) retry.Title = j.CustomName;
                             jobs[jobs.IndexOf(j)] = retry;
@@ -522,6 +534,7 @@ namespace PastDow
         void Count(Job j)
         {
             if (j.State != JobState.Done) return;
+            history.Add(j);
             if (j.Audio) doneAudio++; else doneVideos++;
             lastDoneFile = j.File;
         }
