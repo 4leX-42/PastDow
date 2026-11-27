@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PastDow Browser Capture",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "Send videos playing in your browser to PastDow",
   "minimum_chrome_version": "102",
   "permissions": ["webRequest", "webNavigation", "cookies", "tabs", "storage", "scripting", "alarms"],
