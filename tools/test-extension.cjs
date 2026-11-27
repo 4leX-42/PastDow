@@ -19,17 +19,20 @@ const probe = { readyState: 2, videoWidth: 640, videoHeight: 360, currentTime: 1
 let captureFails = false, activeTab = 1, captures = 0, scriptFails = false, posterMode = false, jpegBytes = [1, 2, 3];
 const thumbnail = 'data:image/jpeg;base64,AQID';
 let tamperData = false;
-let offline = false, reject = false, impostor = false, pairingFile = null;
+let offline = false, reject = false, impostor = false, pairingFile = null, rejectCount = 0, rejectedCalls = 0, impostorCount = 0;
 const nodeCrypto = require('node:crypto');
 const storage = data => ({
-  get: async key => ({ [key]: data[key] }),
+  get: async key => key === null ? structuredClone(data) : ({ [key]: structuredClone(data[key]) }),
   set: async value => { if (data === session) writes++; return Object.assign(data, structuredClone(value)); },
   remove: async key => { delete data[key]; }
 });
+const alarms = new Map();
+let forceResults = [];
 const chrome = {
+  alarms: { get: async name => alarms.get(name), create: async (name, options) => { alarms.set(name, options); }, clear: async name => alarms.delete(name), onAlarm: { addListener: fn => events.alarm = fn } },
   storage: { session: storage(session), local: storage(local) },
   cookies: { getAll: async ({ url }) => [{ name: 'session', value: new URL(url).host, path: '/', domain: new URL(url).host }] },
-  scripting: { executeScript: async options => { probes++; assert.equal(options.target.allFrames, true); if (scriptFails) throw Error('restricted'); if (scriptGate) await scriptGate; return [{ result: { ...probe, poster: posterMode ? 'https://images.example/poster.jpg' : null, rect: { x: 10, y: 20, width: 640, height: 360 }, area: 230400, devicePixelRatio: 2, duration: 125 } }]; } },
+  scripting: { executeScript: async options => { probes++; assert.equal(options.target.allFrames, true); if (scriptFails) throw Error('restricted'); if (options.func.name === 'collectMedia') return forceResults; if (scriptGate) await scriptGate; return [{ result: { ...probe, poster: posterMode ? 'https://images.example/poster.jpg' : null, rect: { x: 10, y: 20, width: 640, height: 360 }, area: 230400, devicePixelRatio: 2, duration: 125 } }]; } },
   tabs: { query: async () => [{ id: activeTab }], captureVisibleTab: async (windowId, options) => { captures++; assert.equal(options.format, 'jpeg'); if (captureFails) throw Error('capture failed'); return thumbnail; }, get: async id => ({ id, windowId: 1, url: tabUrls.get(id) || `https://page.example/${id}`, title: 'Recording' }), onUpdated: { addListener: f => events.update = f }, onRemoved: { addListener: f => events.remove = f } },
   action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async ({ color }) => assert.equal(color, '#f5f5f3'), setBadgeTextColor: async ({ color }) => assert.equal(color, '#000000') },
   webRequest: { onHeadersReceived: { addListener: (f, filter, extra) => { events.headers = f; assert.deepEqual(extra, ['responseHeaders']); } } },
@@ -60,18 +63,19 @@ const context = vm.createContext({ Date: Clock,
   }, chrome, URL, navigator: { userAgent: 'Browser Test' }, TextEncoder, AbortSignal, crypto: globalThis.crypto, Uint8Array,
   btoa: value => Buffer.from(value, 'binary').toString('base64'),
   fetch: async (url, options) => {
+    if (url === 'https://cdn.example/master.m3u8') { assert.equal(options.credentials, 'include'); return { ok: true, text: async () => '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080\na.m3u8\n#EXT-X-STREAM-INF:RESOLUTION=1280x720,BANDWIDTH=3000000\nb.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=900000,RESOLUTION=640x360\nc.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080\na2.m3u8' }; }
     if (url === 'https://images.example/poster.jpg') { imageRequests.push(url); posterFetches++; return { ok: true, headers: { get: () => 'image/jpeg' }, blob: async () => ({ size: 1000 }) }; }
     if (url === thumbnail) return { blob: async () => ({ source: 'capture' }) };
     if (url === 'data:image/jpeg;base64,CAkK') return { blob: async () => ({ source: 'frame' }) };
     if (/^https:\/\/(images.example|i.ytimg.com)\//.test(url)) { assert.equal(options.credentials, 'omit'); imageRequests.push(url); posterFetches++; return { ok: true, headers: { get: () => 'image/jpeg' }, blob: async () => ({ size: 1000, source: 'poster' }) }; }
     if (offline) throw new TypeError('Failed to fetch');
-    if (url.endsWith('/pairing.json')) return { ok: !!pairingFile, status: pairingFile ? 200 : 404, json: async () => pairingFile };
+    if (url.endsWith('/pairing.json')) { assert.equal(options.cache, 'no-store'); return { ok: !!pairingFile, status: pairingFile ? 200 : 404, json: async () => pairingFile }; }
     // what actually goes over the wire, for the "no key, no cookie in clear" checks
     wire.push(options.body || '');
     assert.equal(url, 'http://127.0.0.1:47821/msg');
     assert.equal(JSON.stringify(Object.keys(options.headers)), '["Content-Type"]');
-    if (impostor) return { ok: true, status: 200, json: async () => ({ proof: 'f'.repeat(64) }) };
-    if (reject) return { ok: false, status: 403 };
+    if (impostor || impostorCount-- > 0) return { ok: true, status: 200, json: async () => ({ proof: 'f'.repeat(64) }) };
+    if (reject || rejectCount-- > 0) { rejectedCalls++; return { ok: false, status: 403 }; }
     // PastDow's side of the envelope (Sealed in BrowserLink.cs)
     const derive = label => nodeCrypto.createHmac('sha256', local.key).update(label).digest();
     const env = JSON.parse(options.body), macKey = derive('pastdow-mac');
@@ -80,9 +84,11 @@ const context = vm.createContext({ Date: Clock,
     const decipher = nodeCrypto.createDecipheriv('aes-256-cbc', derive('pastdow-enc'), Buffer.from(env.iv, 'hex'));
     const msg = JSON.parse(Buffer.concat([decipher.update(Buffer.from(env.ct, 'base64')), decipher.final()]).toString());
     assert.ok(Math.abs(now - msg.ts) < 5000); assert.match(msg.nonce, /^[a-f0-9]{32}$/);
-    sent.push({ url: '/' + msg.op, options: { body: JSON.stringify(msg.media || {}), id: msg.id } });
+    sent.push({ url: '/' + msg.op, options: { body: JSON.stringify(msg.media || {}), id: msg.id, pageUrl: msg.url } });
     const data = msg.op === 'history' ? { items: [{ id: '1'.repeat(32), title: 'Clip \u00f1 \ud83c\udfac <&> "\\\n', name: 'clip.mp4', size: 456, date: '2026-11-27T10:00:00.0000000Z', audio: false, thumb: thumbnail, exists: true }] }
-      : msg.op === 'reveal' ? { ok: msg.id === '1'.repeat(32) } : {};
+      : msg.op === 'reveal' ? { ok: msg.id === '1'.repeat(32) }
+      : msg.op === 'ping' ? { q: 1080, vfmt: 'mp4', afmt: 'mp3', mode: 'video' }
+      : msg.op === 'formats' ? { heights: [1080, 720, 480, 360], audio: true, title: 'Available video', duration: 125 } : {};
     // Independent canonicalizer: JSON quotes ASCII; normalize short control escapes and UTF-16 units.
     const canonical = value => {
       if (typeof value === 'string') return JSON.stringify(value).replace(/\\[bfnrt]|[\x7f-\uffff]/g, c => {
@@ -93,10 +99,12 @@ const context = vm.createContext({ Date: Clock,
       if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map(k => canonical(k) + ':' + canonical(value[k])).join(',') + '}';
       return JSON.stringify(value);
     };
-    const suffix = ['history', 'reveal'].includes(msg.op) ? ':' + nodeCrypto.createHash('sha256').update(canonical(data)).digest('hex') : '';
+    const suffix = ['history', 'reveal', 'ping', 'formats'].includes(msg.op) ? ':' + nodeCrypto.createHash('sha256').update(canonical(data)).digest('hex') : '';
     const proof = nodeCrypto.createHmac('sha256', macKey).update('pastdow-ok:' + msg.nonce + suffix).digest('hex');
     if (tamperData && msg.op === 'history') data.items[0].title = 'forged title';
     if (tamperData && msg.op === 'reveal') data.ok = !data.ok;
+    if (tamperData && msg.op === 'ping') data.q = 2160;
+    if (tamperData && msg.op === 'formats') data.heights = [2160];
     return { ok: true, status: 200, json: async () => ({ proof, ...data }) };
   } });
 const source = fs.readFileSync(path.join(root, 'extension/background.js'), 'utf8');
@@ -113,6 +121,7 @@ const flush = async () => {
   await vm.runInContext('Promise.all([...chains.values()])', context);
   // pushes to PastDow are sealed with WebCrypto first: wait until none is in flight
   for (let i = 0; i < 2000 && (i < 10 || vm.runInContext('pushes.size', context) > 0); i++) await new Promise(setImmediate);
+  await vm.runInContext('alarmWork', context);
 };
 const detect = (url, type, length, tabId = 1) => events.headers({ tabId, url, statusCode: 200, responseHeaders: [
   { name: 'Content-Type', value: type }, { name: 'Content-Length', value: String(length) }] });
@@ -125,13 +134,14 @@ async function popupChecks() {
     replaceChildren(...nodes) { this.children = nodes; }
     setAttribute(name, value) { this.attributes[name] = value; }
   }
-  const elements = Object.fromEntries(['pair', 'repair', 'key', 'status', 'items', 'history', 'foundTab', 'historyTab', 'foot'].map(id => [id, new Element(id)]));
+  const elements = Object.fromEntries(['pair', 'repair', 'key', 'status', 'items', 'history', 'foundTab', 'historyTab', 'foot', 'connection', 'force'].map(id => [id, new Element(id)]));
   const calls = [], prefs = {}, listeners = [];
-  let unavailable = false;
+  let unavailable = false, formatGate = null;
+  const foundItems = [];
   const item = { id: '1'.repeat(32), title: 'A very long title '.repeat(20), name: 'a'.repeat(200) + '.mp4', size: 100, date: new Date().toISOString(), audio: true, exists: false };
   const popup = vm.createContext({ document: { getElementById: id => elements[id], createElement: tag => new Element(tag), createElementNS: (ns, tag) => new Element(tag) }, URL,
     chrome: { tabs: { query: async () => [{ id: 1 }] }, storage: { local: { get: async () => prefs, set: async data => Object.assign(prefs, data) }, onChanged: { addListener: fn => listeners.push(fn) } },
-      runtime: { sendMessage: async body => { calls.push(body); if (body.t === 'history') return unavailable ? { error: 'offline' } : { items: [item] }; if (body.t === 'reveal') return { ok: true }; return { paired: true, items: [] }; } } } });
+      runtime: { sendMessage: async body => { calls.push(body); if (body.t === 'status') return { status: 'Connected to PastDow', paired: true, q: 1080, vfmt: 'mp4', afmt: 'mp3', mode: 'video' }; if (body.t === 'history') return unavailable ? { error: 'offline' } : { items: [item] }; if (body.t === 'reveal' || body.t === 'download') return { ok: true }; if (body.t === 'formats') { if (formatGate) await formatGate; return body.id === 'failed' ? { error: 'probe failed' } : { heights: body.id === 'hls' ? [720, 360] : [1080, 720, 480, 360], audio: body.id !== 'silent' }; } return { paired: true, items: foundItems, title: 'Recording', subtitles: 0 }; } } } });
   vm.runInContext(fs.readFileSync(path.join(root, 'extension/popup.js'), 'utf8'), popup);
   await new Promise(setImmediate);
   assert.equal(calls.filter(c => c.t === 'history').length, 0, 'history is lazy');
@@ -153,10 +163,71 @@ async function popupChecks() {
   prefs.lastTab = 'history'; unavailable = false; calls.length = 0;
   vm.runInNewContext(fs.readFileSync(path.join(root, 'extension/popup.js'), 'utf8'), { document: popup.document, chrome: popup.chrome, URL });
   await new Promise(setImmediate);
-  assert.equal(calls[0].t, 'history', 'last tab restored');
+  assert.equal(calls[0].t, 'status', 'popup pings on open');
+  assert.equal(elements.connection.textContent, 'Connected to PastDow');
+  assert.equal(calls[1].t, 'history', 'last tab restored');
+  assert.equal(elements.force.hidden, true);
   assert.equal(vm.runInContext("relativeDate(new Date(Date.now() - 2 * 3600000).toISOString())", popup).length > 0, true);
+  foundItems.push({ id: 'page', url: 'https://page.example/video', kind: 'PAGE', size: 0 },
+    { id: 'direct', url: 'https://cdn.example/direct.mp4', kind: 'MP4', size: 0 },
+    { id: 'hls', url: 'https://cdn.example/master.m3u8', kind: 'HLS', size: 0 },
+    { id: 'failed', url: 'https://page.example/failed', kind: 'PAGE', size: 0 },
+    { id: 'silent', url: 'https://page.example/silent', kind: 'PAGE', size: 0 });
+  await vm.runInContext("selectTab('found')", popup);
+  const card = index => elements.items.children[index];
+  const panelFor = index => card(index).children[2];
+  const buttonsFor = index => card(index).children[1].children.at(-1).children;
+  const group = (panel, label) => panel.children.find(row => row.children[0]?.textContent === label);
+  const chip = (panel, label, text) => group(panel, label).children.find(child => child.tag === 'button' && child.textContent === text);
+  let [edit, gear, download] = buttonsFor(0), panel = panelFor(0);
+  assert.equal(download.textContent, 'DOWNLOAD \u00b7 1080P MP4', 'verified app defaults used in label');
+  assert.equal(panel.hidden, true);
+  let releaseFormats;
+  formatGate = new Promise(resolve => { releaseFormats = resolve; });
+  const opening = gear.onclick();
+  assert.equal(panel.hidden, false); assert.equal(gear.attributes['aria-expanded'], 'true');
+  assert.ok(panel.children.some(child => child.className === 'format-loading'), 'PAGE spinner visible while request is pending');
+  assert.equal(group(panel, 'QUALITY'), undefined, 'unverified qualities are hidden while loading');
+  assert.equal(calls.at(-1).t, 'formats'); assert.equal(calls.at(-1).id, 'page');
+  releaseFormats(); formatGate = null; await opening;
+  assert.ok(chip(panel, 'QUALITY', '480P')); assert.ok(chip(panel, 'QUALITY', '360P'));
+  assert.equal(chip(panel, 'QUALITY', '4K'), undefined, 'only reported PAGE qualities shown');
+  chip(panel, 'QUALITY', '720P').onclick(); chip(panel, 'FORMAT', 'WEBM').onclick();
+  assert.equal(chip(panel, 'QUALITY', '720P').attributes['aria-pressed'], 'true');
+  assert.equal(download.textContent, 'DOWNLOAD \u00b7 720P WEBM');
+  await download.onclick();
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.filter(c => c.t === 'download').at(-1))), { t: 'download', tabId: 1, id: 'page', name: '', audio: false, q: 720, fmt: 'webm' });
+  chip(panel, 'TYPE', 'AUDIO').onclick();
+  assert.equal(download.textContent, 'DOWNLOAD \u00b7 MP3');
+  assert.equal(group(panel, 'QUALITY'), undefined);
+  for (const fmt of ['BEST', 'MP3', 'M4A', 'FLAC', 'WAV', 'OPUS']) assert.ok(chip(panel, 'FORMAT', fmt));
+  chip(panel, 'FORMAT', 'FLAC').onclick(); await download.onclick();
+  assert.equal(calls.filter(c => c.t === 'download').at(-1).fmt, 'flac');
+  assert.equal(calls.filter(c => c.t === 'download').at(-1).q, 0);
+  assert.equal(prefs.lastMode, 'audio');
+  await gear.onclick(); assert.equal(panel.hidden, true);
+  await gear.onclick(); assert.equal(panel.hidden, false);
+  await vm.runInContext('refresh(false)', popup);
+  assert.equal(panelFor(0).hidden, false, 'open panel survives detection refresh');
+  assert.equal(buttonsFor(0)[2].textContent, 'DOWNLOAD \u00b7 FLAC', 'per-item choice survives detection refresh');
+  await buttonsFor(1)[1].onclick();
+  assert.equal(group(panelFor(1), 'QUALITY'), undefined, 'direct files have no quality chips');
+  await buttonsFor(2)[1].onclick();
+  assert.ok(chip(panelFor(2), 'QUALITY', '720P')); assert.ok(chip(panelFor(2), 'QUALITY', '360P'));
+  assert.equal(chip(panelFor(2), 'QUALITY', '1080P'), undefined, 'HLS only shows reported heights');
+  await buttonsFor(3)[1].onclick();
+  assert.ok(chip(panelFor(3), 'QUALITY', '4K'), 'failed probe falls back to generic qualities');
+  await buttonsFor(4)[1].onclick();
+  assert.equal(chip(panelFor(4), 'TYPE', 'AUDIO').disabled, true, 'no audio offered for a silent PAGE');
+  // A fresh popup restores the last mode; format defaults still come from the app.
+  vm.runInNewContext(fs.readFileSync(path.join(root, 'extension/popup.js'), 'utf8'), { document: popup.document, chrome: popup.chrome, URL });
+  await new Promise(setImmediate);
+  assert.equal(buttonsFor(1)[2].textContent, 'DOWNLOAD \u00b7 MP3', 'last mode restored from local storage');
+
 }
 (async () => {
+  const checks = [];
+  const pass = name => checks.push(name);
   await popupChecks();
   const history = await message({ t: 'history' });
   assert.equal(history.items.length, 1); assert.equal(history.items[0].name, 'clip.mp4');
@@ -248,7 +319,27 @@ async function popupChecks() {
   assert.ok(sent.some(x => JSON.parse(x.options.body || '{}').subtitles?.[0]?.cookie === 'session=subs.example'));
   assert.ok(found.userAgent);
   const id = session['tab:1'].media[0].id;
+  const defaults = await message({ t: 'status' });
+  assert.equal(defaults.q, 1080); assert.equal(defaults.vfmt, 'mp4'); assert.equal(defaults.afmt, 'mp3'); assert.equal(defaults.mode, 'video');
+  tamperData = true;
+  assert.equal((await message({ t: 'status' })).status, 'Key rejected: press CHANGE KEY', 'defaults are authenticated');
+  tamperData = false;
+  detect('https://cdn.example/master.m3u8', 'application/vnd.apple.mpegurl', 1000, 20); await flush();
+  const hlsId = session['tab:20'].media[0].id;
+  assert.equal(JSON.stringify((await message({ t: 'formats', tabId: 20, id: hlsId })).heights), '[1080,720,360]');
+  tabUrls.set(21, 'https://www.youtube.com/watch?v=abcdefghijk'); events.commit({ tabId: 21, frameId: 0 }); await flush();
+  const pageFormatId = session['tab:21'].media[0].id;
+  const formats = await message({ t: 'formats', tabId: 21, id: pageFormatId });
+  assert.equal(JSON.stringify(formats.heights), '[1080,720,480,360]'); assert.equal(formats.audio, true);
+  assert.equal(sent.filter(x => x.url === '/formats').at(-1).options.pageUrl, tabUrls.get(21));
+  tamperData = true;
+  assert.match((await message({ t: 'formats', tabId: 21, id: pageFormatId })).error, /rejected/);
+  tamperData = false;
+
   assert.equal((await message({ t: 'download', tabId: 1, id })).ok, true);
+  await message({ t: 'download', tabId: 1, id, audio: true, q: 480, fmt: 'opus' });
+  const selectedQueue = JSON.parse(sent.filter(x => x.url === '/queue').at(-1).options.body);
+  assert.equal(selectedQueue.audio, true); assert.equal(selectedQueue.q, 480); assert.equal(selectedQueue.fmt, 'opus');
   // pencil in the popup: the chosen name travels with the queued item
   assert.equal((await message({ t: 'download', tabId: 1, id, name: '  Clase 3 - repaso  ' })).ok, true);
   assert.equal(JSON.parse(sent.filter(x => x.url === '/queue').at(-1).options.body).name, 'Clase 3 - repaso');
@@ -364,8 +455,9 @@ async function popupChecks() {
   assert.equal(session['tab:10'].media[0].url, 'https://www.youtube.com/watch?v=abcdefghijk');
   delete probe.og; probe.readyState = 2; probe.videoWidth = 640; activeTab = 1;
   offline = true;
-  const fallback = await message({ t: 'download', tabId: 1, id });
+  const fallback = await message({ t: 'download', tabId: 1, id, audio: true, q: 0, fmt: 'm4a' });
   const body = JSON.parse(Buffer.from(fallback.protocol.split('d=')[1], 'base64url').toString());
+  assert.equal(body.audio, true); assert.equal(body.q, 0); assert.equal(body.fmt, 'm4a', 'offline protocol preserves the choice');
   assert.equal(body.key, local.key); assert.equal(body.subtitles[0].lang, 'es');
   assert.equal(body.cookie, 'session=cdn.example');
   offline = false; impostor = true;
@@ -383,9 +475,99 @@ async function popupChecks() {
   pairingFile = { key: 'd'.repeat(64) }; assert.equal(await vm.runInContext('storedKey()', context), 'c'.repeat(64));
   delete local.key; pairingFile = { key: 'not-a-key' }; assert.equal(await vm.runInContext('storedKey()', context), undefined);
   local.key = 'a'.repeat(64);
+  pass('existing regressions and per-item format picker');
+  pairingFile = null;
+  assert.equal((await message({ t: 'status' })).status, 'Connected to PastDow'); await flush();
+  offline = true;
+  assert.equal((await message({ t: 'status' })).status, 'PastDow is closed: open it to receive videos'); await flush();
+  detect('https://cdn.example/offline.mp4', 'video/mp4', 900000, 11); await flush();
+  assert.ok(!session['tab:11'].delivered?.[session['tab:11'].media[0].id]);
+  assert.equal(alarms.get('pastdow-delivery').periodInMinutes, 1);
+  pass('offline queue');
+  offline = false;
+  events.alarm({ name: 'pastdow-delivery' }); await flush();
+  assert.ok(session['tab:11'].delivered[session['tab:11'].media[0].id]);
+  assert.equal(alarms.size, 0, 'alarm cleared after verified delivery');
+  const acknowledged = sent.filter(x => x.url === '/found').length;
+  events.alarm({ name: 'pastdow-delivery' }); await flush();
+  assert.equal(sent.filter(x => x.url === '/found').length, acknowledged, 'acknowledged items are not resent');
+  pass('alarm delivery and clear');
+  delete local.key;
+  assert.equal((await message({ t: 'status' })).status, 'Pairing?'); await flush();
+  local.key = 'a'.repeat(64); reject = true;
+  assert.equal((await message({ t: 'status' })).status, 'Key rejected: press CHANGE KEY'); await flush();
+  pass('four status states');
+  reject = false; pairingFile = { key: 'b'.repeat(64) }; rejectCount = 1;
+  const rejectedBefore = rejectedCalls, requestsBefore = wire.length;
+  assert.equal((await context.request('ping')).q, 1080);
+  assert.equal(local.key, pairingFile.key);
+  assert.equal(rejectedCalls, rejectedBefore + 1);
+  assert.equal(wire.length, requestsBefore + 2, '403 repairs and retries exactly once');
+  pass('403 key refresh');
+  reject = true; pairingFile = { key: 'c'.repeat(64) };
+  const loopBefore = wire.length;
+  await assert.rejects(context.request('ping'), /rejected/);
+  assert.equal(wire.length, loopBefore + 2, 'a second rejection never loops');
+  pass('bounded retry');
+  reject = false; impostor = true; pairingFile = { key: 'd'.repeat(64) };
+  const proofBefore = wire.length;
+  await assert.rejects(context.request('ping'), /rejected/);
+  assert.equal(local.key, pairingFile.key);
+  assert.equal(wire.length, proofBefore + 2, 'bad proof also repairs only once');
+  impostor = false; impostorCount = 1; pairingFile = { key: 'e'.repeat(64) };
+  assert.equal((await context.request('ping')).q, 1080, 'bad proof repairs successfully when the new key is accepted');
+  assert.equal(local.key, pairingFile.key);
+  pairingFile = null;
+  pass('proof recovery');
+  // Execute the actual page collector against media, source, meta and anchor doubles.
+  const collected = vm.runInNewContext('(' + context.collectMedia.toString() + ')()', { URL, document: {
+    baseURI: 'https://page.example/watch', querySelectorAll: selector =>
+      selector === 'video,audio' ? [{ currentSrc: 'https://cdn.example/a.mp4', src: 'blob:skip' }, { currentSrc: 'data:skip', src: '/audio.webm' }] :
+      selector === 'source[src]' ? [{ src: 'https://cdn.example/source.m4v' }] :
+      selector === 'a[href]' ? [{ href: '/linked.mov?token=1' }, { href: '/index.html' }, { href: '/live.m3u8' }, { href: '/live.mpd' }] :
+      ['og.mp4', 'og-url.mp4', 'secure.mp4', 'twitter.mp4'].map(name => ({ content: 'https://cdn.example/' + name }))
+  } });
+  assert.equal(collected.length, 10);
+  assert.ok(collected.every(url => /^https?:/.test(url)));
+  forceResults = [{ result: collected }, { result: ['https://cdn.example/a.mp4', 'blob:skip'] }];
+  const forced = await message({ t: 'force', tabId: 12 }); await flush();
+  assert.equal(forced.result, 'Found 10 videos');
+  assert.equal(session['tab:12'].media.length, 11);
+  assert.equal(session['tab:12'].media.filter(item => item.kind === 'PAGE').length, 1);
+  assert.equal(session['tab:12'].media.find(item => item.kind === 'PAGE').title, 'Try with yt-dlp');
+  assert.equal(session['tab:12'].media.find(item => item.url.endsWith('live.m3u8')).kind, 'HLS');
+  assert.equal(session['tab:12'].media.find(item => item.url.endsWith('live.mpd')).kind, 'DASH');
+  assert.match((await message({ t: 'force', tabId: 12 })).result, /^Nothing new/); await flush();
+  await message({ t: 'list', tabId: 12 }); await flush();
+  assert.equal(session['tab:12'].media.length, 11, 'PAGE fallback survives popup refresh without duplicates');
+  scriptFails = true; forceResults = [];
+  await message({ t: 'force', tabId: 13 }); await flush();
+  assert.equal(session['tab:13'].media.length, 1, 'restricted script still adds PAGE fallback');
+  scriptFails = false;
+  offline = true; detect('https://cdn.example/popup-retry.mp4', 'video/mp4', 900000, 14); await flush();
+  offline = false; await message({ t: 'status' }); await flush();
+  assert.ok(session['tab:14'].delivered[session['tab:14'].media[0].id], 'popup retries pending deliveries');
+  pass('popup retries');
+  offline = true; detect('https://cdn.example/new-detection.mp4', 'video/mp4', 900000, 15); await flush();
+  offline = false; detect('https://cdn.example/second.mp4', 'video/mp4', 900000, 15); await flush();
+  assert.equal(Object.keys(session['tab:15'].delivered).length, 2, 'new detection retries older pending items');
+  offline = true; detect('https://cdn.example/other-tab.mp4', 'video/mp4', 900000, 16); await flush();
+  offline = false; detect('https://cdn.example/trigger.mp4', 'video/mp4', 900000, 17); await flush();
+  assert.ok(session['tab:16'].delivered[session['tab:16'].media[0].id], 'new detection also retries other tabs');
+  pass('detection retries across tabs');
+  assert.ok(Object.values(session['tab:16'].delivered).every(value => /^[a-f0-9]{64}$/.test(value)), 'delivery receipts stay compact');
+  tabUrls.set(18, 'https://cdn.example/direct.mp4'); forceResults = [{ result: [tabUrls.get(18)] }];
+  await message({ t: 'force', tabId: 18 }); await flush();
+  assert.equal(session['tab:18'].media.length, 2);
+  assert.equal(Object.keys(session['tab:18'].delivered).length, 2, 'direct media and PAGE fallback have distinct delivery identities');
+  assert.ok(manifest.permissions.includes('alarms'));
   events.navigate({ tabId: 1, frameId: 1 }); await flush(); assert.equal(session['tab:1'].media.length, 1);
   events.navigate({ tabId: 1, frameId: 0 }); await flush(); assert.equal(session['tab:1'], undefined);
   assert.equal(session['tab:2'].media.length, 1);
+  pass('force sources and PAGE dedupe');
+  assert.equal(checks.length, 10);
+  console.log(`Extension suite ${checks.length}/10: ${checks.join('; ')}`);
+  console.log('Format picker: gear/panel, signed defaults, quality chips, audio/video formats, loading and failure states, per-item choices, last mode, HLS variants, PAGE formats, signed responses and queue payload passed');
   console.log('History: popup tabs, lazy load, saved tab, missing-file card, folder action, offline state, verified response, no paths, reveal by id, unknown/invalid ids, tampered items and ok rejected');
   console.log('Extension: YouTube PAGE/SPA and chunks, canvas priority, black/flat rejection, duplicate fast path, probe throttle, readiness gating, scheduled retries, controls crop, fallback-only posters, ready-frame updates, thumbnails, duration, active-tab capture, poster fallback and upgrade, size limit, visible-video selection, capture/script failures, preservation, found/queue payloads, manifest, icons, JavaScript syntax, filters, sizes, subtitles, dedupe, per-tab state, headers, queue, fallback, sealed messages, server proof, rename, auto-pairing, auth rejection and navigation passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -128,6 +128,16 @@ namespace PastDow
         {
             try
             {
+                // a folder on a drive that is not there (an unplugged disk) would fail inside yt-dlp with a cryptic error
+                string root = Path.GetPathRoot(Path.GetFullPath(j.Folder));
+                if (!string.IsNullOrEmpty(root) && !Directory.Exists(root))
+                {
+                    j.State = JobState.Failed;
+                    j.Error = (j.Audio ? "Audio" : "Video") + " folder " + j.Folder + " is not available (drive " + root.TrimEnd('\\') + " is missing) · choose another one in MENU";
+                    DropInfo(j);
+                    Finished?.Invoke(j);
+                    return;
+                }
                 Directory.CreateDirectory(j.Folder);
                 var psi = Engine.Hidden(Engine.YtDlp, Args(j));
                 psi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";

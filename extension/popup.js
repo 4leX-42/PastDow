@@ -2,6 +2,91 @@ const $ = id => document.getElementById(id);
 let tabId, currentTab = 'found', historyGeneration = 0;
 const names = {};   // item id -> name typed with the pencil (kept while the popup is open)
 
+const choices = new Map(), availableFormats = new Map();
+let defaults = { q: 0, vfmt: 'mkv', afmt: 'best', mode: 'video' }, lastMode;
+const genericHeights = [2160, 1440, 1080, 720];
+const videoFormats = ['mkv', 'mp4', 'webm'], audioFormats = ['best', 'mp3', 'm4a', 'flac', 'wav', 'opus'];
+const qualityLabel = q => q === 0 ? 'BEST' : q === 2160 ? '4K' : `${q}P`;
+function qualityChips(heights) {
+  const allowed = [360, 480, 720, 1080, 1440, 2160];
+  // Round up to a supported cap so a slightly unusual source height is still included.
+  return [...new Set(heights.map(h => allowed.find(q => q >= h)).filter(Boolean))].sort((a, b) => b - a);
+}
+function choiceFor(item) {
+  if (!choices.has(item.id)) choices.set(item.id, {
+    audio: (lastMode || defaults.mode) === 'audio', q: defaults.q,
+    vfmt: defaults.vfmt, afmt: defaults.afmt, open: false
+  });
+  return choices.get(item.id);
+}
+function queueChoice(item) {
+  const choice = choiceFor(item);
+  return { audio: choice.audio, q: choice.audio || !['PAGE', 'HLS', 'DASH'].includes(item.kind) ? 0 : choice.q, fmt: choice.audio ? choice.afmt : choice.vfmt };
+}
+function formatPicker(item, button) {
+  const choice = choiceFor(item), panel = document.createElement('div'), gear = document.createElement('button');
+  panel.className = 'format-panel'; panel.hidden = !choice.open;
+  gear.className = 'gear'; gear.textContent = '\u2699'; gear.title = 'Download options';
+  gear.setAttribute('aria-label', 'Download options');
+  gear.setAttribute('aria-expanded', String(choice.open));
+  const updateLabel = () => {
+    const selected = queueChoice(item);
+    button.textContent = 'DOWNLOAD \u00b7 ' + (selected.audio ? selected.fmt.toUpperCase() :
+      (['PAGE', 'HLS', 'DASH'].includes(item.kind) ? qualityLabel(selected.q) + ' ' : '') + selected.fmt.toUpperCase());
+  };
+  const draw = () => {
+    const info = availableFormats.get(item.url);
+    const heights = ['HLS', 'PAGE', 'DASH'].includes(item.kind) ? (info?.heights ? qualityChips(info.heights) : [...new Set([...genericHeights, ...([480, 360].includes(choice.q) ? [choice.q] : [])])]) : null;
+    if (info?.audio === false && choice.audio) choice.audio = false;
+    if (heights && !info?.loading && choice.q && !heights.includes(choice.q)) choice.q = 0;
+    updateLabel(); panel.replaceChildren();
+    const chips = (label, values, selected, pick) => {
+      const group = document.createElement('div'), caption = document.createElement('span');
+      group.className = 'chip-row'; caption.className = 'chip-label'; caption.textContent = label; group.append(caption);
+      for (const [value, text] of values) {
+        const chip = document.createElement('button'); chip.textContent = text; chip.className = 'chip';
+        chip.setAttribute('aria-pressed', String(value === selected));
+        if (label === 'TYPE' && value === true && info?.audio === false) chip.disabled = true;
+        chip.onclick = () => { pick(value); draw(); };
+        group.append(chip);
+      }
+      panel.append(group);
+    };
+    chips('TYPE', [[false, 'VIDEO'], [true, 'AUDIO']], choice.audio, value => {
+      choice.audio = value; lastMode = value ? 'audio' : 'video';
+      void chrome.storage.local.set({ lastMode });
+    });
+    if (!choice.audio && heights && !info?.loading) chips('QUALITY', [0, ...heights].map(q => [q, qualityLabel(q)]), choice.q, value => { choice.q = value; });
+    chips('FORMAT', (choice.audio ? audioFormats : videoFormats).map(fmt => [fmt, fmt.toUpperCase()]), choice.audio ? choice.afmt : choice.vfmt, value => {
+      if (choice.audio) choice.afmt = value; else choice.vfmt = value;
+    });
+    if (info?.loading) {
+      const loading = document.createElement('small'); loading.className = 'format-loading'; loading.textContent = 'Loading formats...'; panel.append(loading);
+    } else if (info?.failed) {
+      const fallback = document.createElement('small'); fallback.textContent = 'Formats unavailable: showing standard options'; panel.append(fallback);
+    }
+  };
+  const load = async () => {
+    if (!['PAGE', 'HLS'].includes(item.kind)) return;
+    let info = availableFormats.get(item.url);
+    if (!info) {
+      info = { loading: true }; availableFormats.set(item.url, info);
+      info.task = message({ t: 'formats', tabId, id: item.id }).then(result => Object.assign(info, result), () => { info.failed = true; }).finally(() => { info.loading = false; });
+    }
+    draw();
+    if (info.task) await info.task;
+    draw();
+  };
+  gear.onclick = async () => {
+    choice.open = !choice.open; panel.hidden = !choice.open;
+    gear.setAttribute('aria-expanded', String(choice.open));
+    if (choice.open) await load();
+  };
+  draw();
+  if (choice.open) void load();
+  return { gear, panel };
+}
+
 async function message(body) {
   const result = await chrome.runtime.sendMessage(body);
   if (result.error) throw new Error(result.error);
@@ -50,7 +135,7 @@ async function refresh(capture = true) {
       const subs = document.createElement('span'); subs.className = 'subtitles'; subs.textContent = 'CC'; subs.title = 'Subtitles available'; preview.append(subs);
     }
     const kind = document.createElement('span'); kind.className = 'kind'; kind.textContent = item.kind;
-    title.textContent = names[item.id] || result.title || new URL(item.url).pathname.split('/').pop() || 'Video';
+    title.textContent = names[item.id] || (item.kind === 'PAGE' && item.title === 'Try with yt-dlp' ? item.title : '') || result.title || new URL(item.url).pathname.split('/').pop() || 'Video';
     title.title = title.textContent;
     // pencil: edit the file name in place before downloading
     const edit = document.createElement('button'); edit.className = 'pencil'; edit.title = 'Rename before downloading'; edit.textContent = '\u270e';
@@ -62,11 +147,14 @@ async function refresh(capture = true) {
       title.replaceWith(input); input.focus(); input.select();
     };
     small.textContent = detail(item, 0).split(' · ').slice(1).join(' · ');
-    button.textContent = 'DOWNLOAD';
+    button.className = 'download';
+    const picker = formatPicker(item, button);
     button.onclick = async () => {
       button.disabled = true;
       try {
-        const sent = await message({ t: 'download', tabId, id: item.id, name: names[item.id] || '' });
+        const sent = await message({ t: 'download', tabId, id: item.id, name: names[item.id] || '', ...queueChoice(item) });
+        lastMode = choiceFor(item).audio ? 'audio' : 'video';
+        await chrome.storage.local.set({ lastMode });
         if (sent.protocol) {
           // PastDow is closed: its pastdow: handler opens it with this video
           const link = document.createElement('a'); link.href = sent.protocol; link.textContent = 'Open PastDow';
@@ -75,8 +163,8 @@ async function refresh(capture = true) {
         } else { $('status').textContent = 'Added to PastDow'; button.textContent = 'ADDED'; }
       } catch (error) { $('status').textContent = error.message; button.disabled = false; }
     };
-    const actions = document.createElement('div'); actions.className = 'actions'; actions.append(edit, button);
-    text.append(kind, title, small, actions); row.append(preview, text); $('items').append(row);
+    const actions = document.createElement('div'); actions.className = 'actions'; actions.append(edit, picker.gear, button);
+    text.append(kind, title, small, actions); row.append(preview, text, picker.panel); $('items').append(row);
   }
 }
 
@@ -145,6 +233,7 @@ async function selectTab(tab) {
   historyGeneration++;
   $('foundTab').setAttribute('aria-selected', String(currentTab === 'found'));
   $('historyTab').setAttribute('aria-selected', String(currentTab === 'history'));
+  $('force').hidden = currentTab !== 'found';
   $('items').hidden = currentTab !== 'found'; $('history').hidden = currentTab !== 'history';
   $('foot').textContent = currentTab === 'history' ? 'Your last downloads from PastDow · FOLDER shows the file in Explorer' : "Videos also appear in PastDow's BROWSER tab, pick quality there";
   $('status').textContent = '';
@@ -154,9 +243,25 @@ async function selectTab(tab) {
 $('foundTab').onclick = () => void selectTab('found').catch(error => { $('status').textContent = error.message; });
 $('historyTab').onclick = () => void selectTab('history').catch(error => { $('status').textContent = error.message; });
 
+async function refreshConnection() {
+  const result = await message({ t: 'status' });
+  $('connection').textContent = result.status;
+  paired(result.paired);
+  if ([0, 2160, 1440, 1080, 720, 480, 360].includes(result.q)) defaults.q = result.q;
+  if (videoFormats.includes(result.vfmt)) defaults.vfmt = result.vfmt;
+  if (audioFormats.includes(result.afmt)) defaults.afmt = result.afmt;
+  if (['video', 'audio'].includes(result.mode)) defaults.mode = result.mode;
+}
+$('force').onclick = async () => {
+  $('force').disabled = true;
+  try { const result = await message({ t: 'force', tabId }); await refresh(false); $('status').textContent = result.result; }
+  catch (error) { $('status').textContent = error.message; }
+  finally { $('force').disabled = false; }
+};
+
 $('pair').onsubmit = async event => {
   event.preventDefault();
-  try { await message({ t: 'pair', key: $('key').value }); $('key').value = ''; $('status').textContent = 'Paired with PastDow'; if (currentTab === 'history') await loadHistory(); else await refresh(); }
+  try { await message({ t: 'pair', key: $('key').value }); $('key').value = ''; $('status').textContent = 'Paired with PastDow'; await refreshConnection(); if (currentTab === 'history') await loadHistory(); else await refresh(); }
   catch (error) { $('status').textContent = error.message; }
 };
 $('repair').onclick = () => { paired(false); $('repair').hidden = true; $('key').focus(); };
@@ -165,6 +270,9 @@ $('repair').onclick = () => { paired(false); $('repair').hidden = true; $('key')
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   tabId = tab.id;
   const { lastTab } = await chrome.storage.local.get('lastTab');
+  const saved = await chrome.storage.local.get('lastMode');
+  if (['video', 'audio'].includes(saved.lastMode)) lastMode = saved.lastMode;
+  await refreshConnection();
   await selectTab(lastTab);
 })().catch(error => { $('status').textContent = error.message; });
 

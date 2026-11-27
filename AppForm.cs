@@ -107,12 +107,13 @@ namespace PastDow
         protected override async void OnShown(EventArgs e)
         {
             base.OnShown(e);
+            try { ExtensionSetup.RefreshPairing(); } catch { /* A locked extension folder must not prevent startup. */ }
             try
             {
                 browser = new BrowserLink((media, queue) =>
                 {
                     var completion = new TaskCompletionSource<bool>();
-                    try { BeginInvoke((Action)(() => { try { AddFound(media); if (queue) QueueFound(media, false, Settings.MaxHeight, Settings.VideoFormat); completion.SetResult(true); } catch (Exception ex) { completion.SetException(ex); } })); }
+                    try { BeginInvoke((Action)(() => { try { AddFound(media); if (queue) QueueBrowser(media); completion.SetResult(true); } catch (Exception ex) { completion.SetException(ex); } })); }
                     catch (Exception ex) { completion.SetException(ex); }
                     return completion.Task;
                 });
@@ -350,7 +351,7 @@ namespace PastDow
             {
                 t = "state",
                 q = Settings.MaxHeight, vfmt = Settings.VideoFormat, afmt = Settings.AudioFormat,
-                videoDir = Settings.VideoDir, audioDir = Settings.AudioDir, videoFree = Free(Settings.VideoDir), audioFree = Free(Settings.AudioDir), skip = Settings.SkipDone, channelFolders = Settings.ChannelFolders, update = updateNote,
+                videoDir = Settings.VideoDir, audioDir = Settings.AudioDir, videoMissing = !DriveThere(Settings.VideoDir), audioMissing = !DriveThere(Settings.AudioDir), videoFree = Free(Settings.VideoDir), audioFree = Free(Settings.AudioDir), skip = Settings.SkipDone, channelFolders = Settings.ChannelFolders, update = updateNote,
                 engine = engineStatus, enginePct = enginePct, ready = engineReady, version = Installer.Version,
                 browserKey = Settings.BrowserKey, browserStatus, browsers = Browsers()
             });
@@ -388,10 +389,16 @@ namespace PastDow
             PushFound();
         }
 
+        void QueueBrowser(BrowserMedia media)
+        {
+            var choice = media.Choice();
+            QueueFound(media, choice.Audio, choice.Height, choice.Format);
+        }
+
         void QueueFound(BrowserMedia media, bool audio, int q, string fmt, string name = null)
         {
             if (audio ? !Settings.AudioFormats.Contains(fmt) : !Settings.VideoFormats.Contains(fmt)) fmt = audio ? Settings.AudioFormat : Settings.VideoFormat;
-            if (!new[] { 0, 720, 1080, 1440, 2160 }.Contains(q)) q = 0;
+            if (!BrowserChoice.Heights.Contains(q)) q = Settings.MaxHeight;
             var job = media.Job(audio, audio ? 0 : q, fmt);
             string chosen = BrowserMedia.CleanName(name);
             if (chosen != null) { job.CustomName = chosen; job.Title = chosen; }
@@ -412,7 +419,7 @@ namespace PastDow
                 if (arg.StartsWith("pastdow:", StringComparison.OrdinalIgnoreCase))
                 {
                     var media = BrowserMedia.Protocol(arg);
-                    if (media != null) { AddFound(media); QueueFound(media, false, Settings.MaxHeight, Settings.VideoFormat); }
+                    if (media != null) { AddFound(media); QueueBrowser(media); }
                 }
                 else if (!arg.StartsWith("--")) Add(arg, false, Settings.MaxHeight, Settings.VideoFormat);
             }
@@ -431,6 +438,13 @@ namespace PastDow
                     size = SizeOf(j.File), file = j.File != null ? Path.GetFileName(j.File) : "", subtitleNote = j.SubtitleNote
                 }).ToList()
             });
+        }
+
+        /// <summary>The folder's drive exists (an unplugged disk makes every download into it fail).</summary>
+        static bool DriveThere(string dir)
+        {
+            try { string root = Path.GetPathRoot(Path.GetFullPath(dir)); return string.IsNullOrEmpty(root) || Directory.Exists(root); }
+            catch { return true; }
         }
 
         static string Free(string dir)

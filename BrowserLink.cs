@@ -32,6 +32,10 @@ namespace PastDow
         public string userAgent { get; set; }
         public string cookie { get; set; }
         public string key { get; set; }
+        public object audio { get; set; }
+        public object q { get; set; }
+        public object fmt { get; set; }
+        public BrowserChoice Choice() => BrowserChoice.From(this);
         public List<BrowserSubtitle> subtitles { get; set; } = new List<BrowserSubtitle>();
 
         public string Identity => page + "\n" + new Uri(url).GetLeftPart(UriPartial.Path);
@@ -102,6 +106,7 @@ namespace PastDow
 
         public DownloadHistory History;
         public Func<string, Task<bool>> Reveal;
+        public BrowserFormats Formats = new BrowserFormats();
 
         public void Start()
         {
@@ -161,12 +166,27 @@ namespace PastDow
                     var media = plain.media;
                     if (media == null || !media.Valid()) { res.StatusCode = 400; return; }
                     media.key = null;
+                    if (plain.op == "queue")
+                    {
+                        var choice = media.Choice();
+                        media.audio = choice.Audio; media.q = choice.Height; media.fmt = choice.Format;
+                    }
                     await receive(media, plain.op == "queue").ConfigureAwait(false);
                 }
-                else if (plain.op == "history" || plain.op == "reveal")
+                else if (plain.op == "history" || plain.op == "reveal" || plain.op == "ping" || plain.op == "formats")
                 {
                     var data = new Dictionary<string, object>();
                     if (plain.op == "history") data["items"] = History?.Items() ?? new object[0];
+                    else if (plain.op == "ping")
+                    {
+                        data["q"] = Settings.MaxHeight; data["vfmt"] = Settings.VideoFormat;
+                        data["afmt"] = Settings.AudioFormat; data["mode"] = Settings.Audio ? "audio" : "video";
+                    }
+                    else if (plain.op == "formats")
+                    {
+                        if (!BrowserMedia.Http(plain.url) || plain.url.Length > 16384) { res.StatusCode = 400; return; }
+                        data = await Formats.Get(plain.url).ConfigureAwait(false);
+                    }
                     else data["ok"] = History != null && Reveal != null && await Reveal(plain.id).ConfigureAwait(false);
                     string proof = Sealed.DataProof(plain.nonce, data);
                     data["proof"] = proof;
@@ -186,6 +206,7 @@ namespace PastDow
         {
             public string op { get; set; }
             public string id { get; set; }
+            public string url { get; set; }
             public long ts { get; set; }
             public string nonce { get; set; }
             public BrowserMedia media { get; set; }

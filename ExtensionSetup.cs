@@ -72,7 +72,23 @@ namespace PastDow
                 using (var src = asm.GetManifestResourceStream(name))
                 using (var dst = File.Create(target)) src.CopyTo(dst);
             }
-            File.WriteAllText(Path.Combine(dir, "pairing.json"), "{\"key\":\"" + Settings.BrowserKey + "\"}", new UTF8Encoding(false));
+            RefreshPairing();
+        }
+
+        /// <summary>Refresh only the key in an existing installation, atomically.</summary>
+        public static void RefreshPairing()
+        {
+            string dir = Folder;
+            if (!Directory.Exists(dir)) return;
+            string target = Path.Combine(dir, "pairing.json");
+            string temp = Path.Combine(dir, "pairing-" + Guid.NewGuid().ToString("N") + ".tmp");
+            try
+            {
+                File.WriteAllText(temp, "{\"key\":\"" + Settings.BrowserKey + "\"}", new UTF8Encoding(false));
+                if (File.Exists(target)) File.Replace(temp, target, null);
+                else File.Move(temp, target);
+            }
+            finally { if (File.Exists(temp)) File.Delete(temp); }
         }
 
         /// <summary>

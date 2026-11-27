@@ -191,7 +191,7 @@ function enrich(tabId) {
         } catch { return null; }
       };
       // YouTube's page image is stable and avoids hardware-overlay captures entirely.
-      if (pageItem && !goodThumbnail(pageItem)) {
+      if (pageItem && youtubePage(pageItem.url) && !goodThumbnail(pageItem)) {
         const top = results.find(x => x.frameId === 0)?.result || video;
         for (const url of [top.og, `https://i.ytimg.com/vi/${new URL(pageItem.url).searchParams.get('v')}/hqdefault.jpg`]) {
           thumb = await image(url); if (thumb) { quality = 5; break; }
@@ -278,15 +278,19 @@ async function seal(key, message) {
   return { envelope: { iv: ivHex, ct, mac: hex(await hmac(macKey, `pastdow-msg:${ivHex}:${ct}`)) }, macKey };
 }
 // Installed from PastDow (MENU > BROWSER EXTENSION) the folder carries pairing.json with the key: pair by itself.
-// A key pasted in the popup is kept in storage and wins over the file.
+// A stored key wins until PastDow rejects it; then a changed key file can repair pairing.
+async function fileKey() {
+  try {
+    const r = await fetch(chrome.runtime.getURL('pairing.json'), { cache: 'no-store' });
+    const file = r.ok ? await r.json() : null;
+    if (/^[a-f0-9]{64}$/.test(file?.key)) return file.key;
+  } catch { }
+}
 async function storedKey() {
   let { key } = await chrome.storage.local.get('key');
   if (key) return key;
-  try {
-    const r = await fetch(chrome.runtime.getURL('pairing.json'));
-    const file = r.ok ? await r.json() : null;
-    if (file && /^[a-f0-9]{64}$/.test(file.key)) { key = file.key; await chrome.storage.local.set({ key }); }
-  } catch { /* loaded by hand without PastDow's file: paste the key in the popup */ }
+  key = await fileKey();
+  if (key) await chrome.storage.local.set({ key });
   return key;
 }
 chrome.runtime.onInstalled?.addListener(() => {
@@ -301,22 +305,76 @@ function canonical(value) {
   if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map(k => canonical(k) + ':' + canonical(value[k])).join(',') + '}';
   return JSON.stringify(value);
 }
-async function request(op, media, id) {
+async function request(op, media, id, retry = true) {
   const key = await storedKey();
   if (!key) throw new Error('Paste your PastDow pairing key first');
   const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
-  const { envelope, macKey } = await seal(key, { op, ts: Date.now(), nonce, ...(media ? { media } : {}), ...(id !== undefined ? { id } : {}) });
+  const { envelope, macKey } = await seal(key, { op, ts: Date.now(), nonce, ...(media ? op === 'formats' ? { url: media.url } : { media } : {}), ...(id !== undefined ? { id } : {}) });
   const response = await fetch(ENDPOINT + '/msg', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(envelope), signal: AbortSignal.timeout(2500) });
-  if (!response.ok) throw new Error(response.status === 403 ? 'Pairing key rejected, copy it again from PastDow' : `PastDow returned ${response.status}`);
-  const { proof, ...data } = await response.json().catch(() => ({}));
-  const withData = op === 'history' || op === 'reveal';
-  const digest = withData ? ':' + hex(await crypto.subtle.digest('SHA-256', utf8(canonical(data)))) : '';
-  if (proof !== hex(await hmac(macKey, 'pastdow-ok:' + nonce + digest)))
-    throw new Error('Pairing key rejected, or another program answers on PastDow\'s port; copy the key again from PastDow');
-  return withData ? data : true;
+    body: JSON.stringify(envelope), signal: AbortSignal.timeout(op === 'formats' ? 28000 : 2500) });
+  try {
+    if (!response.ok) throw new Error(response.status === 403 ? 'Pairing key rejected, copy it again from PastDow' : `PastDow returned ${response.status}`);
+    const answer = await response.json().catch(() => null);
+    const { proof, ...data } = answer && typeof answer === 'object' && !Array.isArray(answer) ? answer : {};
+    const withData = ['history', 'reveal', 'ping', 'formats'].includes(op);
+    const digest = withData ? ':' + hex(await crypto.subtle.digest('SHA-256', utf8(canonical(data)))) : '';
+    if (proof !== hex(await hmac(macKey, 'pastdow-ok:' + nonce + digest)))
+      throw new Error('Pairing key rejected, or another program answers on PastDow\'s port; copy the key again from PastDow');
+    return withData ? data : true;
+  } catch (error) {
+    if (response.status === 403 || error.message.includes('rejected')) {
+      if (retry) {
+        const fresh = await fileKey();
+        if (fresh && fresh !== key) {
+          await chrome.storage.local.set({ key: fresh });
+          return request(op, media, id, false);
+        }
+      }
+      error.code = 'rejected';
+    }
+    throw error;
+  }
 }
+async function connectionStatus() {
+  if (!await storedKey()) return { status: 'Pairing?', paired: false };
+  try { const defaults = await request('ping'); return { ...defaults, status: 'Connected to PastDow', paired: true }; }
+  catch (error) { return { status: error.code === 'rejected' ? 'Key rejected: press CHANGE KEY' : 'PastDow is closed: open it to receive videos', paired: true }; }
+}
+// Store a compact content digest, not a second copy of every thumbnail and subtitle URL.
+const deliveryVersion = async (item, data) => hex(await crypto.subtle.digest('SHA-256', utf8(JSON.stringify([item, data.subtitles]))));
+async function undelivered(data) {
+  for (const item of data.media) if (data.delivered?.[item.id] !== await deliveryVersion(item, data)) return true;
+  return false;
+}
+const DELIVERY_ALARM = 'pastdow-delivery';
+let alarmWork = Promise.resolve();
+function syncDeliveryAlarm() {
+  alarmWork = alarmWork.catch(() => {}).then(async () => {
+    const all = await chrome.storage.session.get(null);
+    let pending = false;
+    for (const [key, data] of Object.entries(all)) {
+      if (key.startsWith('tab:') && await undelivered(data)) { pending = true; break; }
+    }
+    if (pending) {
+      if (!await chrome.alarms.get(DELIVERY_ALARM)) await chrome.alarms.create(DELIVERY_ALARM, { periodInMinutes: 1 });
+    } else await chrome.alarms.clear(DELIVERY_ALARM);
+  });
+  return alarmWork;
+}
+async function retryDeliveries(excludeTabId) {
+  const all = await chrome.storage.session.get(null);
+  await Promise.all(Object.keys(all).filter(key => key.startsWith('tab:') && Number(key.slice(4)) !== excludeTabId).map(async key => {
+    const tabId = Number(key.slice(4));
+    await chains.get(tabId);
+    const data = await state(tabId), generation = generations.get(tabId) || 0;
+    await Promise.all(data.media.map(item => push(item, data, tabId, generation)));
+  }));
+  await syncDeliveryAlarm();
+}
+chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === DELIVERY_ALARM) void retryDeliveries().catch(() => {}); });
+
 async function push(item, data, tabId, generation) {
+  if (data.delivered?.[item.id] === await deliveryVersion(item, data)) return;
   const id = `${tabId}:${item.id}`;
   const current = pushes.get(id);
   if (current) { current.latest = { item, data, generation }; return; }
@@ -327,10 +385,21 @@ async function push(item, data, tabId, generation) {
       if ((generations.get(tabId) || 0) !== latest.generation) continue;
       try {
         const body = await payload(latest.item, latest.data, tabId);
-        if ((generations.get(tabId) || 0) === latest.generation) await request('found', body);
-      } catch { /* The popup can resend detections when PastDow is opened later. */ }
+        const version = await deliveryVersion(latest.item, latest.data);
+        if ((generations.get(tabId) || 0) !== latest.generation) continue;
+        await request('found', body);
+        await serial(tabId, async () => {
+          if ((generations.get(tabId) || 0) !== latest.generation) return;
+          const current = await state(tabId);
+          const item = current.media.find(item => item.id === latest.item.id);
+          if (!item || await deliveryVersion(item, current) !== version) return;
+          current.delivered = Object.fromEntries(current.media.filter(item => current.delivered?.[item.id]).map(item => [item.id, current.delivered[item.id]]));
+          current.delivered[item.id] = version;
+          await chrome.storage.session.set({ [`tab:${tabId}`]: current });
+        });
+      } catch { /* Pending state survives worker suspension; the alarm retries it. */ }
     }
-  } finally { pushes.delete(id); }
+  } finally { pushes.delete(id); await syncDeliveryAlarm(); }
 }
 
 chrome.webRequest.onHeadersReceived.addListener(details => {
@@ -343,7 +412,10 @@ chrome.webRequest.onHeadersReceived.addListener(details => {
     const data = await state(tabId), list = detection.subtitle ? data.subtitles : data.media;
     const id = identity(details.url), previous = list.find(x => x.id === id);
     if (previous && previous.url === details.url && (detection.size || 0) <= (previous.size || 0) &&
-        previous.kind === detection.kind && previous.ext === detection.ext && previous.lang === detection.lang) return;
+        previous.kind === detection.kind && previous.ext === detection.ext && previous.lang === detection.lang) {
+      if (await undelivered(data)) for (const media of data.media) void push(media, data, tabId, generation);
+      return;
+    }
     if (youtubePage((await chrome.tabs.get(tabId)).url)) return;
     const item = { ...previous, ...detection, id, url: details.url, size: Math.max(detection.size || 0, previous?.size || 0) };
     if (previous) list.splice(list.indexOf(previous), 1);
@@ -355,7 +427,9 @@ chrome.webRequest.onHeadersReceived.addListener(details => {
     await chrome.action.setBadgeBackgroundColor({ tabId, color: '#f5f5f3' });
     await chrome.action.setBadgeTextColor?.({ tabId, color: '#000000' });
     // A later subtitle response refreshes videos already sent to the app.
-    for (const media of detection.subtitle ? data.media : [item]) void push(media, data, tabId, generation);
+    await syncDeliveryAlarm();
+    for (const media of data.media) void push(media, data, tabId, generation);
+    void retryDeliveries(tabId).catch(() => {});
     if (!detection.subtitle && !goodThumbnail(item)) { schedulePreviewRetries(tabId); void enrich(tabId); }
   });
 }, { urls: ['<all_urls>'] }, ['responseHeaders']);
@@ -366,23 +440,64 @@ function registerYoutube(tabId) {
     const tab = await chrome.tabs.get(tabId), url = youtubePage(tab.url), data = await state(tabId);
     if ((generations.get(tabId) || 0) !== generation) return;
     const previous = data.media.find(item => item.kind === 'PAGE');
-    if (!url && !previous) return;
+    if (!url) return;
     if (previous?.url === url && previous.title === tab.title) return;
     if (previous?.url !== url) {
       generations.set(tabId, (generations.get(tabId) || 0) + 1);
       previews.delete(tabId); stopPreviewRetries(tabId);
     }
     const item = url ? { ...(previous?.url === url ? previous : {}), id: url, url, kind: 'PAGE', size: 0, title: tab.title } : null;
-    const next = { media: item ? [item] : [], subtitles: [] };
+    const next = { media: item ? [item] : [], subtitles: [], delivered: previous?.url === url ? data.delivered : {} };
     await chrome.storage.session.set({ [`tab:${tabId}`]: next });
     await chrome.action.setBadgeText({ tabId, text: item ? '1' : '' });
     await chrome.action.setBadgeBackgroundColor({ tabId, color: '#f5f5f3' });
     await chrome.action.setBadgeTextColor?.({ tabId, color: '#000000' });
+    await syncDeliveryAlarm();
     if (item) {
       void push(item, next, tabId, generations.get(tabId) || 0);
       if (!goodThumbnail(item)) { schedulePreviewRetries(tabId); void enrich(tabId); }
     }
   });
+}
+
+// Runs in the page, in every frame. Resolve relative attributes against that frame's URL.
+function collectMedia() {
+  const urls = new Set();
+  const add = value => { try { const url = new URL(value, document.baseURI); if (/^https?:$/.test(url.protocol)) urls.add(url.href); } catch { } };
+  for (const media of document.querySelectorAll('video,audio')) { if (media.currentSrc) add(media.currentSrc); if (media.src) add(media.src); }
+  for (const source of document.querySelectorAll('source[src]')) add(source.src);
+  for (const meta of document.querySelectorAll('meta[property="og:video"],meta[property="og:video:url"],meta[property="og:video:secure_url"],meta[property="twitter:player:stream"],meta[name="twitter:player:stream"]')) if (meta.content) add(meta.content);
+  for (const anchor of document.querySelectorAll('a[href]')) if (/\.(mp4|webm|m4v|mov|m3u8|mpd)$/i.test(new URL(anchor.href, document.baseURI).pathname)) add(anchor.href);
+  return [...urls];
+}
+async function forceDetect(tabId) {
+  const generation = generations.get(tabId) || 0;
+  let results = [];
+  try { results = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: collectMedia }); } catch { }
+  const count = await serial(tabId, async () => {
+    if ((generations.get(tabId) || 0) !== generation) return 0;
+    const tab = await chrome.tabs.get(tabId), data = await state(tabId);
+    let count = 0;
+    for (const url of results.flatMap(frame => Array.isArray(frame.result) ? frame.result : [])) {
+      if (data.media.length >= (data.media.some(item => item.kind === 'PAGE') ? 200 : 199)) break;
+      if (typeof url !== 'string' || !http(url)) continue;
+      const id = identity(url);
+      if (data.media.some(item => item.id === id)) continue;
+      const ext = new URL(url).pathname.match(/\.([a-z0-9]+)$/i)?.[1]?.toUpperCase();
+      data.media.push({ id, url, kind: ext === 'M3U8' ? 'HLS' : ext === 'MPD' ? 'DASH' : ext || 'VIDEO', size: 0 });
+      count++;
+    }
+    if (http(tab.url) && !data.media.some(item => item.kind === 'PAGE'))
+      data.media.push({ id: `page:${tab.url}`, url: tab.url, kind: 'PAGE', size: 0, title: 'Try with yt-dlp' });
+    await chrome.storage.session.set({ [`tab:${tabId}`]: data });
+    await chrome.action.setBadgeText({ tabId, text: data.media.length ? String(data.media.length) : '' });
+    await syncDeliveryAlarm();
+    for (const item of data.media) void push(item, data, tabId, generation);
+    void retryDeliveries(tabId).catch(() => {});
+    return count;
+  });
+  schedulePreviewRetries(tabId); await enrich(tabId);
+  return { result: count ? `Found ${count} video${count === 1 ? '' : 's'}` : 'Nothing new: try playing the video, or use Try with yt-dlp' };
 }
 
 function reset(tabId) {
@@ -391,6 +506,7 @@ function reset(tabId) {
   stopPreviewRetries(tabId);
   void serial(tabId, async () => {
     await chrome.storage.session.remove(`tab:${tabId}`);
+    await syncDeliveryAlarm();
     await chrome.action.setBadgeText({ tabId, text: '' }).catch(() => {});
   });
 }
@@ -402,6 +518,28 @@ chrome.tabs.onUpdated?.addListener((tabId, change) => {
 });
 chrome.tabs.onRemoved.addListener(reset);
 
+function hlsHeights(text) {
+  const heights = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (!/^#EXT-X-STREAM-INF:/i.test(line.trim())) continue;
+    const height = Number(line.match(/(?:^|[:,])\s*RESOLUTION=\d+x(\d+)/i)?.[1]);
+    if (height > 0) heights.push(height);
+  }
+  return [...new Set(heights)].sort((a, b) => b - a);
+}
+async function itemFormats(tabId, id) {
+  await chains.get(tabId);
+  const data = await state(tabId), item = data.media.find(item => item.id === id);
+  if (!item) throw new Error('This page changed, play the video again');
+  if (item.kind === 'PAGE') return request('formats', { url: item.url });
+  if (item.kind === 'HLS') {
+    const response = await fetch(item.url, { credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(8000) });
+    if (!response.ok) throw new Error('Could not read stream qualities');
+    return { heights: hlsHeights(await response.text()), audio: true };
+  }
+  return { heights: [], audio: true };
+}
+
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
   if (sender.id !== chrome.runtime.id) return false;
   (async () => {
@@ -412,6 +550,13 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       await request('ping');
       return { ok: true };
     }
+    if (message.t === 'status') {
+      const status = await connectionStatus();
+      void retryDeliveries().catch(() => {});
+      return status;
+    }
+    if (message.t === 'formats') return itemFormats(message.tabId, message.id);
+    if (message.t === 'force') return await forceDetect(message.tabId);
     if (message.t === 'history') return await request('history');
     if (message.t === 'reveal') {
       if (typeof message.id !== 'string' || !/^[a-f0-9]{32}$/.test(message.id)) throw new Error('Invalid history id');
@@ -434,6 +579,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       // renamed with the pencil in the popup: PastDow saves the file with exactly this name
       const name = String(message.name || '').trim().slice(0, 200);
       if (name) body.name = name;
+      for (const option of ['audio', 'q', 'fmt']) if (message[option] !== undefined) body[option] = message[option];
       const key = await storedKey();
       if (!key) throw new Error('Paste your PastDow pairing key first');
       try { await request('queue', body); return { ok: true }; }
