@@ -4,6 +4,18 @@ const names = {};   // item id -> name typed with the pencil (kept while the pop
 
 const choices = new Map(), availableFormats = new Map();
 let defaults = { q: 0, vfmt: 'mkv', afmt: 'best', mode: 'video' }, lastMode;
+// SAVE in the format panel: the user's own defaults for this browser, over PastDow's saved ones
+let pastdowDefaults = { ...defaults }, savedDefaults = null;
+function cleanDefaults(d) {
+  if (!d || typeof d !== 'object') return null;
+  const out = {};
+  if (['video', 'audio'].includes(d.mode)) out.mode = d.mode;
+  if ([0, 2160, 1440, 1080, 720, 480, 360].includes(d.q)) out.q = d.q;
+  if (videoFormats.includes(d.vfmt)) out.vfmt = d.vfmt;
+  if (audioFormats.includes(d.afmt)) out.afmt = d.afmt;
+  return Object.keys(out).length ? out : null;
+}
+function applyDefaults() { defaults = { ...pastdowDefaults, ...(savedDefaults || {}) }; if (savedDefaults?.mode) lastMode = savedDefaults.mode; }
 const genericHeights = [2160, 1440, 1080, 720];
 const videoFormats = ['mkv', 'mp4', 'webm'], audioFormats = ['best', 'mp3', 'm4a', 'flac', 'wav', 'opus'];
 const qualityLabel = q => q === 0 ? 'BEST' : q === 2160 ? '4K' : `${q}P`;
@@ -60,6 +72,27 @@ function formatPicker(item, button) {
     chips('FORMAT', (choice.audio ? audioFormats : videoFormats).map(fmt => [fmt, fmt.toUpperCase()]), choice.audio ? choice.afmt : choice.vfmt, value => {
       if (choice.audio) choice.afmt = value; else choice.vfmt = value;
     });
+    // SAVE keeps this choice for every next download from this browser; RESET goes back to PastDow's defaults
+    const actions = document.createElement('div'); actions.className = 'format-actions';
+    const save = document.createElement('button'); save.className = 'mini'; save.textContent = 'SAVE'; save.title = 'Use this for every download';
+    save.onclick = async () => {
+      savedDefaults = cleanDefaults({ mode: choice.audio ? 'audio' : 'video', q: choice.q, vfmt: choice.vfmt, afmt: choice.afmt });
+      await chrome.storage.local.set({ formatDefaults: savedDefaults });
+      applyDefaults();
+      for (const [key, other] of choices) if (other !== choice && !other.open) choices.delete(key);   // untouched cards follow the new default
+      $('status').textContent = 'Saved: ' + (choice.audio ? choice.afmt.toUpperCase() + ' audio' : qualityLabel(choice.q) + ' ' + choice.vfmt.toUpperCase()) + ' by default';
+      void refresh(false).catch(() => {});
+    };
+    actions.append(save);
+    if (savedDefaults) {
+      const reset = document.createElement('button'); reset.className = 'mini link'; reset.textContent = 'RESET'; reset.title = "Back to PastDow's defaults";
+      reset.onclick = async () => {
+        savedDefaults = null; lastMode = undefined; await chrome.storage.local.remove(['formatDefaults', 'lastMode']); applyDefaults(); choices.clear();
+        $('status').textContent = "Back to PastDow's defaults"; void refresh(false).catch(() => {});
+      };
+      actions.append(reset);
+    }
+    panel.append(actions);
     if (info?.loading) {
       const loading = document.createElement('small'); loading.className = 'format-loading'; loading.textContent = 'Loading formats...'; panel.append(loading);
     } else if (info?.failed) {
@@ -251,6 +284,8 @@ async function refreshConnection() {
   if (videoFormats.includes(result.vfmt)) defaults.vfmt = result.vfmt;
   if (audioFormats.includes(result.afmt)) defaults.afmt = result.afmt;
   if (['video', 'audio'].includes(result.mode)) defaults.mode = result.mode;
+  pastdowDefaults = { ...defaults };
+  applyDefaults();
 }
 $('force').onclick = async () => {
   $('force').disabled = true;
@@ -272,7 +307,9 @@ $('repair').onclick = () => { paired(false); $('repair').hidden = true; $('key')
   const { lastTab } = await chrome.storage.local.get('lastTab');
   const saved = await chrome.storage.local.get('lastMode');
   if (['video', 'audio'].includes(saved.lastMode)) lastMode = saved.lastMode;
-  await refreshConnection();
+  savedDefaults = cleanDefaults((await chrome.storage.local.get('formatDefaults')).formatDefaults);
+  applyDefaults();
+  await refreshConnection().catch(() => {});
   await selectTab(lastTab);
 })().catch(error => { $('status').textContent = error.message; });
 
