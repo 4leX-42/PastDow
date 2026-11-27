@@ -35,6 +35,7 @@ namespace PastDow
         public string InfoJson;     // X posts: video files found through the FixTweet API, fed to yt-dlp with --load-info-json
         // capture window (Capture.cs): the page the video was found in, and what yt-dlp needs to fetch it like the page did
         public string Page, Referer, UserAgent, Cookie;
+        public string Thumb;       // validated browser thumbnail; no browser credentials are persisted
         public string CustomName;   // renamed with the pencil before downloading: the file gets exactly this name
         public string MediaKind, SubtitleNote;
         public List<BrowserSubtitle> Subtitles = new List<BrowserSubtitle>();

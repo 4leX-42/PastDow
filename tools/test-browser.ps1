@@ -4,7 +4,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $assemblyPath = (Resolve-Path -LiteralPath $Assembly).Path
-$testDir = Join-Path $PSScriptRoot '../bin/browser-tests'
+$testDir = Join-Path $PSScriptRoot ('../bin/browser-tests-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force $testDir | Out-Null
 $testDir = (Resolve-Path -LiteralPath $testDir).Path
 Add-Type -AssemblyName System.Web.Extensions
@@ -13,6 +13,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq.Expressions;
+using System.Linq;
+using System.Collections;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
@@ -37,14 +39,21 @@ public static class BrowserChecks
         return new JavaScriptSerializer().Serialize(new { url = url, page = "https://page.example/recording", title = "Recording", kind = "MP4", size = 900000,
             userAgent = "Test agent", cookie = "media=value", subtitles = new[] { new { url = subtitle, lang = "und", cookie = "sub=value", ext = "vtt" } } });
     }
+    static object historyStore;
+    static int launches;
+    static string launchedFolder, launchedFile;
+    static void FakeLaunch(string folder, string file) { launches++; launchedFolder = folder; launchedFile = file; }
+    static Task<bool> FakeReveal(string id) { return Task.FromResult((bool)Call(T("DownloadHistory"), historyStore, "Reveal", id, (Action<string, string>)FakeLaunch)); }
+    static object[] Items(object store) { return (object[])Call(T("DownloadHistory"), store, "Items"); }
+    static string EntryId(object store) { return (string)Items(store)[0].GetType().GetProperty("id").GetValue(Items(store)[0], null); }
     static string lastReply;
     static string Hex(byte[] b) { return BitConverter.ToString(b).Replace("-", "").ToLowerInvariant(); }
     static byte[] Hmac(byte[] key, string text) { using (var h = new System.Security.Cryptography.HMACSHA256(key)) return h.ComputeHash(Encoding.ASCII.GetBytes(text)); }
     // the extension's side of the envelope (extension/background.js seal)
-    static string Seal(string key, string op, string media, long ts, string nonce)
+    static string Seal(string key, string op, string media, long ts, string nonce, string id = null)
     {
         byte[] k = Encoding.ASCII.GetBytes(key), enc = Hmac(k, "pastdow-enc"), mac = Hmac(k, "pastdow-mac");
-        string plain = "{\"op\":\"" + op + "\",\"ts\":" + ts + ",\"nonce\":\"" + nonce + "\"" + (media != null ? ",\"media\":" + media : "") + "}";
+        string plain = "{\"op\":\"" + op + "\",\"ts\":" + ts + ",\"nonce\":\"" + nonce + "\"" + (media != null ? ",\"media\":" + media : "") + (id != null ? ",\"id\":" + new JavaScriptSerializer().Serialize(id) : "") + "}";
         using (var aes = System.Security.Cryptography.Aes.Create())
         {
             aes.Key = enc; aes.GenerateIV(); aes.Mode = System.Security.Cryptography.CipherMode.CBC;
@@ -55,6 +64,103 @@ public static class BrowserChecks
         }
     }
     static string Proof(string key, string nonce) { return Hex(Hmac(Hmac(Encoding.ASCII.GetBytes(key), "pastdow-mac"), "pastdow-ok:" + nonce)); }
+    // Independent verifier for the returned data: no call to the app's canonicalizer or proof helper.
+    static string Canonical(object value)
+    {
+        if (value == null) return "null";
+        if (value is string)
+        {
+            var b = new StringBuilder("\"");
+            foreach (char c in (string)value)
+            {
+                if (c == '"' || c == '\\') b.Append('\\').Append(c);
+                else if (c < 32 || c > 126) b.Append("\\u").Append(((int)c).ToString("x4"));
+                else b.Append(c);
+            }
+            return b.Append('"').ToString();
+        }
+        var map = value as Dictionary<string, object>;
+        if (map != null) return "{" + string.Join(",", map.Keys.OrderBy(k => k, StringComparer.Ordinal).Select(k => Canonical(k) + ":" + Canonical(map[k]))) + "}";
+        if (value is IEnumerable) return "[" + string.Join(",", ((IEnumerable)value).Cast<object>().Select(Canonical)) + "]";
+        if (value is bool) return (bool)value ? "true" : "false";
+        return Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture);
+    }
+    static bool Verify(string key, string nonce, string response)
+    {
+        var data = new JavaScriptSerializer { MaxJsonLength = 33554432 }.Deserialize<Dictionary<string, object>>(response);
+        string proof = (string)data["proof"]; data.Remove("proof");
+        using (var sha = System.Security.Cryptography.SHA256.Create())
+            return proof == Hex(Hmac(Hmac(Encoding.ASCII.GetBytes(key), "pastdow-mac"), "pastdow-ok:" + nonce + ":" + Hex(sha.ComputeHash(Encoding.UTF8.GetBytes(Canonical(data))))));
+    }
+    static void HistoryChecks(object job)
+    {
+        Type type = T("DownloadHistory");
+        historyStore = Activator.CreateInstance(type, new object[] { dir });
+        Check(Items(historyStore).Length == 0, "missing history starts empty");
+        string file = Path.Combine(dir, "history clip.mp4"); File.WriteAllText(file, "123456");
+        Set(job, "File", file); Set(job, "Title", "Original"); Set(job, "CustomName", "Clip \u00f1 \ud83c\udfac <&> \"\\\n");
+        Set(job, "Thumb", "data:image/jpeg;base64,AQID"); Set(job, "Audio", true);
+        foreach (string state in new[] { "Skipped", "Failed", "Canceled" })
+        {
+            Set(job, "State", Enum.Parse(T("JobState"), state));
+            Check(!(bool)Call(type, historyStore, "Add", job), "do not record " + state);
+        }
+        Set(job, "State", Enum.Parse(T("JobState"), "Done"));
+        Check((bool)Call(type, historyStore, "Add", job), "record done");
+        string id = EntryId(historyStore);
+        var js = new JavaScriptSerializer { MaxJsonLength = 33554432 };
+        var saved = js.Deserialize<List<Dictionary<string, object>>>(File.ReadAllText(Path.Combine(dir, "history.json")))[0];
+        Check((string)saved["title"] == (string)job.GetType().GetField("CustomName", Flags).GetValue(job) && (int)saved["size"] == 6, "custom title and actual file bytes");
+        Check((string)saved["url"] == "https://cdn.example/video.mp4?token=fresh" && (bool)saved["audio"] && (string)saved["thumb"] == "data:image/jpeg;base64,AQID", "source, audio and thumbnail persisted");
+        Check(DateTimeOffset.Parse((string)saved["date"]).Offset == TimeSpan.Zero, "UTC date");
+        object reload = Activator.CreateInstance(type, new object[] { dir });
+        Check(Items(reload).Length == 1 && EntryId(reload) == id, "persisted stable id");
+        Check(!(bool)Call(type, historyStore, "Reveal", "unknown", (Action<string, string>)FakeLaunch) && launches == 0, "unknown id never launches");
+        Check(!(bool)Call(type, historyStore, "Reveal", file, (Action<string, string>)FakeLaunch) && launches == 0, "path never accepted as id");
+        Check((bool)Call(type, historyStore, "Reveal", id, (Action<string, string>)FakeLaunch) && launchedFile == file, "existing file selected");
+        File.Delete(file);
+        Check((bool)Call(type, historyStore, "Reveal", id, (Action<string, string>)FakeLaunch) && launchedFile == null && launchedFolder == dir, "missing file opens existing folder");
+        File.WriteAllText(file, "123456");
+        // Concurrent completions must preserve the most recent 200 and always leave parseable JSON.
+        var seed = new List<Dictionary<string, object>>();
+        for (int i = 0; i < 199; i++)
+        {
+            var entry = new Dictionary<string, object>(saved); entry["id"] = Guid.NewGuid().ToString("N");
+            entry["date"] = "2000-01-01T00:00:00.0000000Z"; seed.Add(entry);
+        }
+        seed.Add(saved); seed[199]["date"] = "1999-01-01T00:00:00.0000000Z";
+        File.WriteAllText(Path.Combine(dir, "history.json"), js.Serialize(seed));
+        historyStore = Activator.CreateInstance(type, new object[] { dir });
+        Parallel.For(0, 8, i => { Check((bool)Call(type, historyStore, "Add", job), "concurrent add"); Items(historyStore); });
+        Check(Items(historyStore).Length == 200, "200 entry limit");
+        reload = Activator.CreateInstance(type, new object[] { dir });
+        Check(Items(reload).Length == 200 && EntryId(reload) == EntryId(historyStore), "limit and newest first persisted");
+        saved = js.Deserialize<List<Dictionary<string, object>>>(File.ReadAllText(Path.Combine(dir, "history.json")))[0];
+        var all = js.Deserialize<List<Dictionary<string, object>>>(File.ReadAllText(Path.Combine(dir, "history.json")));
+        Check(!all.Any(e => (string)e["id"] == id), "oldest evicted");
+        Check(all.Zip(all.Skip(1), (a, b) => string.CompareOrdinal((string)a["date"], (string)b["date"]) >= 0).All(x => x), "newest first");
+        Check(Directory.GetFiles(dir, "*.tmp").Length == 0, "atomic writes leave no temp files");
+        foreach (string broken in new[] { "broken json", "null", "[null]" })
+        {
+            File.WriteAllText(Path.Combine(dir, "history.json"), broken);
+            historyStore = Activator.CreateInstance(type, new object[] { dir });
+            Check(Items(historyStore).Length == 0 && (bool)Call(type, historyStore, "Add", job), "corrupt history recovers");
+        }
+        Set(job, "CustomName", null); Set(job, "Thumb", "https://bad.example/thumb.jpg");
+        Check((bool)Call(type, historyStore, "Add", job), "title fallback added");
+        Check(js.Serialize(Items(historyStore)[0]).Contains("Original") && !js.Serialize(Items(historyStore)[0]).Contains("bad.example"), "title fallback and thumbnail sanitized");
+        string realFile = (string)job.GetType().GetField("File", Flags).GetValue(job);
+        Set(job, "File", Path.Combine(dir, "missing-folder", "clip.mp4"));
+        Check((bool)Call(type, historyStore, "Add", job), "missing folder fixture");
+        int beforeMissing = launches;
+        Check(!(bool)Call(type, historyStore, "Reveal", EntryId(historyStore), (Action<string, string>)FakeLaunch) && launches == beforeMissing, "missing folder never launches");
+        Set(job, "File", realFile);
+        // Restore Unicode entry for the endpoint verifier.
+        Set(job, "CustomName", "Clip \u00f1 \ud83c\udfac <&> \"\\\n");
+        Check((bool)Call(type, historyStore, "Add", job), "endpoint fixture");
+        launches = 0;
+        Console.WriteLine("History: Done only, fields, thumbnail, stable ids, atomic persistence, concurrent adds, newest first, 200 limit, corrupt recovery and fake reveal passed");
+    }
     static long Now() { return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); }
     static string Nonce() { return Guid.NewGuid().ToString("N"); }
     static int Request(HttpListener listener, object receiver, int port, string method, string path, string body)
@@ -112,7 +218,9 @@ public static class BrowserChecks
         Check((bool)audioPageJob.GetType().GetField("Audio", Flags).GetValue(audioPageJob) && !(bool)audioPageJob.GetType().GetField("Captured", Flags).GetValue(audioPageJob), "PAGE supports normal audio jobs");
         string pageArgs = (string)Call(T("Runner"), null, "Args", pageJob);
         Check(!pageArgs.Contains("--load-info-json") && pageArgs.Contains("--embed-subs"), "PAGE uses normal extraction and subtitle options");
+        mediaType.GetProperty("thumb").SetValue(media, "data:image/jpeg;base64,AQID", null);
         object job = Call(mediaType, media, "Job", false, 1080, "mkv");
+        Check((string)job.GetType().GetField("Thumb", Flags).GetValue(job) == "data:image/jpeg;base64,AQID", "browser thumbnail carried onto job");
         Check((bool)job.GetType().GetField("Captured", Flags).GetValue(job), "captured job");
         string info = (string)Call(T("CapturedMedia"), null, "Info", job);
         var data = js.Deserialize<Dictionary<string, object>>(File.ReadAllText(info));
@@ -136,17 +244,34 @@ public static class BrowserChecks
         File.WriteAllText(video, "test"); File.WriteAllText(sub, "test"); File.WriteAllText(image, "test");
         Call(T("Runner"), null, "CleanSidecars", video);
         Check(File.Exists(sub) && !File.Exists(image), "preserve subtitle sidecars");
+        HistoryChecks(job);
         Type receiverType = T("BrowserLink");
         Type callbackType = typeof(Func<,,>).MakeGenericType(mediaType, typeof(bool), typeof(Task));
         var p = Expression.Parameter(mediaType, "media"); var q = Expression.Parameter(typeof(bool), "queue");
         Delegate callback = Expression.Lambda(callbackType, Expression.Call(typeof(BrowserChecks).GetMethod("Receive", Flags), Expression.Convert(p, typeof(object)), q), p, q).Compile();
         object receiver = Activator.CreateInstance(receiverType, Flags, null, new object[] { callback }, null);
+        Set(receiver, "History", historyStore); Set(receiver, "Reveal", (Func<string, Task<bool>>)FakeReveal);
         // Use a separate ephemeral port, never the user's running PastDow endpoint.
         var probe = new TcpListener(IPAddress.Loopback, 0); probe.Start(); int port = ((IPEndPoint)probe.LocalEndpoint).Port; probe.Stop();
         using (var listener = new HttpListener())
         {
             listener.Prefixes.Add("http://127.0.0.1:" + port + "/"); listener.Start();
             string key = new string('a', 64), n;
+            n = Nonce();
+            Check(Request(listener, receiver, port, "POST", "/msg", Seal(key, "history", null, Now(), n)) == 200, "history endpoint");
+            Check(Verify(key, n, lastReply), "response proof binds canonical history data");
+            Check(!Verify(key, n, lastReply.Replace("Original", "Tampered")), "tampered history rejected");
+            Check(!lastReply.Contains("\"file\"") && !lastReply.Contains("history.json") && !lastReply.Contains(dir.Replace("\\", "\\\\")), "history never sends full paths");
+            Check(lastReply.Contains("\"name\":\"history clip.mp4\"") && lastReply.Contains("\"exists\":true"), "history sends filename and existence");
+            string known = EntryId(historyStore);
+            n = Nonce();
+            Check(Request(listener, receiver, port, "POST", "/msg", Seal(key, "reveal", null, Now(), n, "unknown")) == 200 && lastReply.Contains("\"ok\":false") && launches == 0 && Verify(key, n, lastReply), "unknown id endpoint never launches");
+            n = Nonce();
+            Check(Request(listener, receiver, port, "POST", "/msg", Seal(key, "reveal", null, Now(), n, known)) == 200 && lastReply.Contains("\"ok\":true") && launches == 1 && Verify(key, n, lastReply), "known id endpoint uses fake launcher");
+            Check(!Verify(key, n, lastReply.Replace("true", "false")), "tampered reveal result rejected");
+            File.Delete(launchedFile);
+            n = Nonce();
+            Check(Request(listener, receiver, port, "POST", "/msg", Seal(key, "history", null, Now(), n)) == 200 && lastReply.Contains("\"exists\":false") && Verify(key, n, lastReply), "deleted file existence refreshed");
             Check(Request(listener, receiver, port, "POST", "/msg", Seal(new string('b', 64), "ping", null, Now(), Nonce())) == 403, "reject wrong key");
             Check(Request(listener, receiver, port, "GET", "/msg", null) == 404 && Request(listener, receiver, port, "POST", "/queue", body) == 404, "only sealed POST /msg");
             n = Nonce();
@@ -295,6 +420,14 @@ public static class BrowserChecks
     }
 }
 '@
-[BrowserChecks]::Run($assemblyPath, $testDir)
-[BrowserChecks]::Mux($FfmpegDir)
-[BrowserChecks]::Direct($FfmpegDir)
+try {
+    [BrowserChecks]::Run($assemblyPath, $testDir)
+    [BrowserChecks]::Mux($FfmpegDir)
+    [BrowserChecks]::Direct($FfmpegDir)
+}
+finally {
+    $safeRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../bin')) + [IO.Path]::DirectorySeparatorChar
+    $safeTarget = [IO.Path]::GetFullPath($testDir)
+    if (-not $safeTarget.StartsWith($safeRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Test cleanup outside bin refused' }
+    Remove-Item -LiteralPath $safeTarget -Recurse -Force
+}

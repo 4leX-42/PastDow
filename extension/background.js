@@ -293,18 +293,28 @@ chrome.runtime.onInstalled?.addListener(() => {
   void storedKey();
   void chrome.tabs.query({}).then(tabs => Promise.all(tabs.filter(tab => youtubePage(tab.url)).map(tab => registerYoutube(tab.id)))).catch(() => {});
 });
-async function request(op, media) {
+// Canonical JSON shared with Sealed.Canonical: sorted keys and ASCII-escaped UTF-16 strings.
+function canonical(value) {
+  if (typeof value === 'string') return '"' + value.replace(/[\\"\x00-\x1f\x7f-\uffff]/g, c =>
+    c === '"' || c === '\\' ? '\\' + c : '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')) + '"';
+  if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
+  if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map(k => canonical(k) + ':' + canonical(value[k])).join(',') + '}';
+  return JSON.stringify(value);
+}
+async function request(op, media, id) {
   const key = await storedKey();
   if (!key) throw new Error('Paste your PastDow pairing key first');
   const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
-  const { envelope, macKey } = await seal(key, { op, ts: Date.now(), nonce, ...(media ? { media } : {}) });
+  const { envelope, macKey } = await seal(key, { op, ts: Date.now(), nonce, ...(media ? { media } : {}), ...(id !== undefined ? { id } : {}) });
   const response = await fetch(ENDPOINT + '/msg', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(envelope), signal: AbortSignal.timeout(2500) });
   if (!response.ok) throw new Error(response.status === 403 ? 'Pairing key rejected, copy it again from PastDow' : `PastDow returned ${response.status}`);
-  const { proof } = await response.json().catch(() => ({}));
-  if (proof !== hex(await hmac(macKey, 'pastdow-ok:' + nonce)))
+  const { proof, ...data } = await response.json().catch(() => ({}));
+  const withData = op === 'history' || op === 'reveal';
+  const digest = withData ? ':' + hex(await crypto.subtle.digest('SHA-256', utf8(canonical(data)))) : '';
+  if (proof !== hex(await hmac(macKey, 'pastdow-ok:' + nonce + digest)))
     throw new Error('Pairing key rejected, or another program answers on PastDow\'s port; copy the key again from PastDow');
-  return true;
+  return withData ? data : true;
 }
 async function push(item, data, tabId, generation) {
   const id = `${tabId}:${item.id}`;
@@ -401,6 +411,11 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       await chrome.storage.local.set({ key });
       await request('ping');
       return { ok: true };
+    }
+    if (message.t === 'history') return await request('history');
+    if (message.t === 'reveal') {
+      if (typeof message.id !== 'string' || !/^[a-f0-9]{32}$/.test(message.id)) throw new Error('Invalid history id');
+      return await request('reveal', null, message.id);
     }
     if (message.t === 'list') {
       await registerYoutube(message.tabId);
