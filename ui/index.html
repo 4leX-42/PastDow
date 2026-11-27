@@ -475,6 +475,9 @@ renderFound([]);
 
 $('menuBtn').addEventListener('click', () => $('side').classList.toggle('open'));
 $('closeMenu').addEventListener('click', () => $('side').classList.remove('open'));
+// a click anywhere else in the window, or Esc, closes the menu too (pickers and dropdowns inside it keep it open)
+document.addEventListener('pointerdown', e => { const side = $('side'); if (side.classList.contains('open') && !side.contains(e.target) && !$('menuBtn').contains(e.target)) side.classList.remove('open'); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') $('side').classList.remove('open'); });
 $('mVideo').addEventListener('click', () => send({ t: 'pickFolder', audio: false }));
 $('mAudio').addEventListener('click', () => send({ t: 'pickFolder', audio: true }));
 $('mSkip').addEventListener('click', () => send({ t: 'skip' }));
@@ -544,8 +547,9 @@ function receive(m) {
     $('dV').textContent = m.vfmt.toUpperCase();
     $('dA').textContent = m.afmt.toUpperCase();
     dest.video = [m.videoDir, m.videoFree || '']; dest.audio = [m.audioDir, m.audioFree || '']; renderDest();
-    $('mVideo').querySelector('em').textContent = m.videoDir;
-    $('mAudio').querySelector('em').textContent = m.audioDir;
+    // a folder on a missing drive (unplugged disk) is flagged: every download into it would fail
+    $('mVideo').querySelector('em').textContent = m.videoDir + (m.videoMissing ? '  ·  NOT AVAILABLE, CHOOSE ANOTHER' : '');
+    $('mAudio').querySelector('em').textContent = m.audioDir + (m.audioMissing ? '  ·  NOT AVAILABLE, CHOOSE ANOTHER' : '');
     $('mSkip').querySelector('em').textContent = m.skip ? 'On' : 'Off';
     $('mFolders').querySelector('em').textContent = m.channelFolders ? 'One folder per channel' : 'Off · straight into the folder';
     $('mUpdate').querySelector('em').textContent = m.update;

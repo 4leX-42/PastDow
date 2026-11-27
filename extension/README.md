@@ -20,6 +20,14 @@ into the extension popup and press **PAIR**.
 
 ## Use
 
+**FORCE DETECT** searches the page for media and adds **Try with yt-dlp** as a fallback.
+
+Pairing repairs itself from PastDow's key file after a rejected key. Pending videos retry automatically
+when you open the popup, detect another video, or once a minute while PastDow is unavailable.
+
+**Download options** (the gear beside **DOWNLOAD**) picks video quality and format, or audio format, for that item.
+Available stream/page qualities load when you open it; the initial choices come from PastDow.
+
 **HISTORY** shows recent downloads; **FOLDER** selects the file in Windows Explorer.
 
 Detected videos show a thumbnail and duration when the page makes them available.

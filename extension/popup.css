@@ -41,3 +41,21 @@ article.missing { opacity:.55; }
 .filename { overflow-wrap:anywhere; }
 .history-empty { padding:20px 0; color:#9a9a96; font-size:12px; }
 .folder-icon { width:14px; height:14px; margin-right:5px; vertical-align:middle; fill:none; stroke:currentColor; stroke-width:1.5; }
+
+#connection { font-size:11px; color:#9a9a96; margin:-8px 0 14px; }
+#force { margin-top:10px; }
+
+#items article { flex-wrap:wrap; }
+#items .info { flex-basis:190px; }
+#items .actions { flex-wrap:wrap; gap:5px; }
+.gear { padding:4px 7px; font-size:15px; line-height:1; border-color:#2a2a2a; }
+.download { font-size:9px; letter-spacing:.04em; padding:7px 6px; max-width:100%; overflow-wrap:anywhere; }
+.format-panel { flex:0 0 100%; min-width:0; border-top:1px solid #2a2a2a; padding-top:10px; }
+.chip-row { display:flex; align-items:center; flex-wrap:wrap; gap:5px; margin:0 0 8px; }
+.chip-label { flex:0 0 100%; color:#9a9a96; font-size:9px; letter-spacing:.12em; }
+.chip { padding:5px 7px; font-size:9px; border-color:#2a2a2a; }
+.chip[aria-pressed="true"] { background:#f5f5f3; color:#080808; border-color:#f5f5f3; }
+.format-loading { display:flex; gap:6px; align-items:center; }
+.format-loading::before { content:""; width:9px; height:9px; border:1px solid #444; border-top-color:#f5f5f3; border-radius:50%; animation:format-spin .8s linear infinite; }
+@keyframes format-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion:reduce) { .format-loading::before { animation:none; } }

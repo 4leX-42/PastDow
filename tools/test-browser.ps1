@@ -1,6 +1,6 @@
 param(
     [string]$Assembly = (Join-Path $PSScriptRoot '../bin/verify-browser/PastDow.exe'),
-    [string]$FfmpegDir = (Join-Path $env:LOCALAPPDATA 'PastDow/bin')
+    [string]$FfmpegDir = (Join-Path $PSScriptRoot '../bin/test-tools')
 )
 $ErrorActionPreference = 'Stop'
 $assemblyPath = (Resolve-Path -LiteralPath $Assembly).Path
@@ -26,18 +26,83 @@ public static class BrowserChecks
 {
     static Assembly app;
     static string dir;
-    static int received, queued;
+    static int received, queued, formatRuns;
+    static object lastMedia;
+    static bool failFormats;
     const BindingFlags Flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
     static Type T(string name) { return app.GetType("PastDow." + name, true); }
     static void Set(object target, string name, object value) { target.GetType().GetField(name, Flags).SetValue(target, value); }
     static void Setting(string name, object value) { T("Settings").GetField(name, Flags).SetValue(null, value); }
     static object Call(Type type, object target, string method, params object[] args) { return type.GetMethod(method, Flags).Invoke(target, args); }
     static void Check(bool value, string label) { if (!value) throw new Exception(label); }
-    static Task Receive(object media, bool queue) { received++; if (queue) queued++; return Task.FromResult(true); }
+    static Task Receive(object media, bool queue) { lastMedia = media; received++; if (queue) queued++; return Task.FromResult(true); }
     static string Body(string url, string subtitle)
     {
         return new JavaScriptSerializer().Serialize(new { url = url, page = "https://page.example/recording", title = "Recording", kind = "MP4", size = 900000,
             userAgent = "Test agent", cookie = "media=value", subtitles = new[] { new { url = subtitle, lang = "und", cookie = "sub=value", ext = "vtt" } } });
+    }
+    static object Field(object obj, string name) { return obj.GetType().GetField(name, Flags).GetValue(obj); }
+    static string FormatsJson = "{\"title\":\"Sample\",\"duration\":125.5,\"formats\":[{\"height\":720,\"vcodec\":\"avc1\",\"acodec\":\"aac\"},{\"height\":1080,\"vcodec\":\"avc1\",\"acodec\":\"none\"},{\"height\":720,\"vcodec\":\"vp9\",\"acodec\":\"none\"},{\"height\":480,\"vcodec\":\"avc1\"},{\"height\":360,\"vcodec\":\"avc1\"},{\"height\":90,\"vcodec\":\"images\"},{\"height\":null,\"vcodec\":\"none\",\"acodec\":\"opus\"}]}";
+    static Task<string> FakeFormats(string url)
+    {
+        formatRuns++;
+        if (failFormats) throw new InvalidOperationException("fake probe failure");
+        return Task.FromResult(FormatsJson);
+    }
+    static Dictionary<string, object> FormatResult(object probe, string url)
+    {
+        return ((Task<Dictionary<string, object>>)Call(T("BrowserFormats"), probe, "Get", url)).GetAwaiter().GetResult();
+    }
+    static void ChoiceChecks(JavaScriptSerializer json)
+    {
+        Setting("Audio", false); Setting("MaxHeight", 720); Setting("VideoFormat", "webm"); Setting("AudioFormat", "opus");
+        Func<string, object> choice = text => Call(T("BrowserMedia"), json.Deserialize(text, T("BrowserMedia")), "Choice");
+        object value = choice("{}");
+        Check(!(bool)Field(value, "Audio") && (int)Field(value, "Height") == 720 && (string)Field(value, "Format") == "webm", "missing choices use saved defaults");
+        foreach (int height in new[] { 0, 2160, 1440, 1080, 720, 480, 360 })
+        {
+            value = choice("{\"audio\":false,\"q\":" + height + ",\"fmt\":\"mp4\"}");
+            Check((int)Field(value, "Height") == height && (string)Field(value, "Format") == "mp4", "valid video quality " + height);
+        }
+        foreach (string format in new[] { "best", "mp3", "m4a", "flac", "wav", "opus" })
+        {
+            value = choice("{\"audio\":true,\"q\":1080,\"fmt\":\"" + format + "\"}");
+            Check((bool)Field(value, "Audio") && (int)Field(value, "Height") == 0 && (string)Field(value, "Format") == format, "valid audio format " + format);
+        }
+        foreach (string text in new[] { "{\"q\":999,\"fmt\":\"exe\"}", "{\"audio\":\"bad\",\"q\":{},\"fmt\":false}", "{\"audio\":false,\"q\":-1,\"fmt\":\"mp3\"}" })
+        {
+            value = choice(text);
+            Check(!(bool)Field(value, "Audio") && (int)Field(value, "Height") == 720 && (string)Field(value, "Format") == "webm", "invalid choices use saved defaults");
+        }
+        Setting("Audio", true);
+        value = choice("{\"fmt\":\"mkv\"}");
+        Check((bool)Field(value, "Audio") && (int)Field(value, "Height") == 0 && (string)Field(value, "Format") == "opus", "invalid audio format uses saved audio default");
+        Setting("Audio", false); Setting("MaxHeight", 0); Setting("VideoFormat", "mkv"); Setting("AudioFormat", "best");
+        object media = json.Deserialize("{\"url\":\"https://page.example/video\",\"page\":\"https://page.example/video\",\"kind\":\"PAGE\"}", T("BrowserMedia"));
+        foreach (int height in new[] { 480, 360 })
+        {
+            object job = Call(T("BrowserMedia"), media, "Job", false, height, "mp4");
+            Check(((string)Call(T("Runner"), null, "Args", job)).Contains("height<=" + height), "job arguments preserve lower quality " + height);
+        }
+        var formats = Activator.CreateInstance(T("BrowserFormats"));
+        Set(formats, "Run", (Func<string, Task<string>>)FakeFormats);
+        var result = FormatResult(formats, "https://page.example/sample");
+        Check(string.Join(",", (int[])result["heights"]) == "1080,720,480,360" && (bool)result["audio"] && (string)result["title"] == "Sample" && (double)result["duration"] == 125.5, "parse distinct descending video heights and metadata");
+        result["proof"] = "do not cache response signatures";
+        Check(!FormatResult(formats, "https://page.example/sample").ContainsKey("proof") && formatRuns == 1, "URL cache returns independent response dictionaries");
+        var cache = (IDictionary)Field(formats, "cache");
+        var entry = cache["https://page.example/sample"];
+        DateTime until = (DateTime)Field(entry, "Until");
+        Check(until > DateTime.UtcNow.AddMinutes(9) && until <= DateTime.UtcNow.AddMinutes(10), "format cache lifetime is ten minutes");
+        Set(entry, "Until", DateTime.UtcNow.AddSeconds(-1));
+        FormatResult(formats, "https://page.example/sample"); Check(formatRuns == 2, "expired cache probes again");
+        failFormats = true;
+        try { FormatResult(formats, "https://page.example/failure"); throw new Exception("failure expected"); } catch (InvalidOperationException) { }
+        failFormats = false;
+        FormatResult(formats, "https://page.example/failure"); Check(formatRuns == 4, "failed probes are not cached");
+        var silent = (Dictionary<string, object>)Call(T("BrowserFormats"), null, "Parse", "{\"formats\":[{\"height\":1080,\"vcodec\":\"avc1\",\"acodec\":\"none\"}]}");
+        Check(!(bool)silent["audio"], "silent video does not offer audio");
+        Console.WriteLine("Formats: fake runner only; sorted distinct heights, metadata, audio presence, ten-minute cache, expiry, independent signatures, failure retry; queue choices validated including 480/360");
     }
     static object historyStore;
     static int launches;
@@ -50,10 +115,10 @@ public static class BrowserChecks
     static string Hex(byte[] b) { return BitConverter.ToString(b).Replace("-", "").ToLowerInvariant(); }
     static byte[] Hmac(byte[] key, string text) { using (var h = new System.Security.Cryptography.HMACSHA256(key)) return h.ComputeHash(Encoding.ASCII.GetBytes(text)); }
     // the extension's side of the envelope (extension/background.js seal)
-    static string Seal(string key, string op, string media, long ts, string nonce, string id = null)
+    static string Seal(string key, string op, string media, long ts, string nonce, string id = null, string url = null)
     {
         byte[] k = Encoding.ASCII.GetBytes(key), enc = Hmac(k, "pastdow-enc"), mac = Hmac(k, "pastdow-mac");
-        string plain = "{\"op\":\"" + op + "\",\"ts\":" + ts + ",\"nonce\":\"" + nonce + "\"" + (media != null ? ",\"media\":" + media : "") + (id != null ? ",\"id\":" + new JavaScriptSerializer().Serialize(id) : "") + "}";
+        string plain = "{\"op\":\"" + op + "\",\"ts\":" + ts + ",\"nonce\":\"" + nonce + "\"" + (media != null ? ",\"media\":" + media : "") + (id != null ? ",\"id\":" + new JavaScriptSerializer().Serialize(id) : "") + (url != null ? ",\"url\":" + new JavaScriptSerializer().Serialize(url) : "") + "}";
         using (var aes = System.Security.Cryptography.Aes.Create())
         {
             aes.Key = enc; aes.GenerateIV(); aes.Mode = System.Security.Cryptography.CipherMode.CBC;
@@ -183,9 +248,24 @@ public static class BrowserChecks
     public static void Run(string assembly, string directory)
     {
         app = Assembly.LoadFile(assembly); dir = directory;
-        Setting("Home", dir); Setting("BrowserKey", new string('a', 64));
+        Setting("Home", dir); Setting("BinDir", Path.Combine(dir, "tools")); Setting("BrowserKey", new string('a', 64));
         Setting("VideoDir", dir); Setting("AudioDir", dir);
+        string extension = Path.Combine(dir, "extension"), pairing = Path.Combine(extension, "pairing.json");
+        Call(T("ExtensionSetup"), null, "RefreshPairing");
+        Check(!Directory.Exists(extension), "startup does not create an extension folder");
+        Directory.CreateDirectory(extension);
+        File.WriteAllText(Path.Combine(extension, "sentinel.txt"), "unchanged");
+        Call(T("ExtensionSetup"), null, "RefreshPairing");
+        Check(File.ReadAllText(pairing) == "{\"key\":\"" + new string('a', 64) + "\"}", "startup writes current pairing key");
+        Setting("BrowserKey", new string('b', 64));
+        Call(T("ExtensionSetup"), null, "RefreshPairing");
+        Check(File.ReadAllText(pairing) == "{\"key\":\"" + new string('b', 64) + "\"}", "startup atomically replaces stale pairing key");
+        Check(File.ReadAllText(Path.Combine(extension, "sentinel.txt")) == "unchanged" && Directory.GetFiles(extension).Length == 2, "startup only changes pairing.json and leaves no temp files");
+        Setting("BrowserKey", new string('a', 64));
+        Console.WriteLine("Startup pairing: absent folder untouched, existing folder refreshed, stale key replaced, other files preserved, no temp files (temp Home)");
+
         var js = new JavaScriptSerializer();
+        ChoiceChecks(js);
         string body = Body("https://cdn.example/video.mp4?token=fresh", "https://subs.example/caption.vtt?token=fresh");
         Type mediaType = T("BrowserMedia"); object media = js.Deserialize(body, mediaType);
         Check((bool)Call(mediaType, media, "Valid"), "valid media");
@@ -232,9 +312,11 @@ public static class BrowserChecks
         string args = (string)Call(T("Runner"), null, "Args", job);
         Check(args.Contains("--load-info-json") && args.Contains("--embed-subs") && args.Contains("--sub-langs all"), "direct-file args");
         Check(!args.Contains("--add-header"), "do not override per-subtitle cookies");
-        var protocol = js.Deserialize<Dictionary<string, object>>(body); protocol["key"] = new string('a', 64);
+        var protocol = js.Deserialize<Dictionary<string, object>>(body); protocol["key"] = new string('a', 64); protocol["audio"] = false; protocol["q"] = 480; protocol["fmt"] = "mp4";
         string encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(js.Serialize(protocol))).TrimEnd('=').Replace('+', '-').Replace('/', '_');
         Check(Call(mediaType, null, "Protocol", "pastdow://add?d=" + encoded) != null, "protocol accepts paired payload");
+        var protocolChoice = Call(mediaType, Call(mediaType, null, "Protocol", "pastdow://add?d=" + encoded), "Choice");
+        Check((int)Field(protocolChoice, "Height") == 480 && (string)Field(protocolChoice, "Format") == "mp4", "offline protocol preserves per-download options");
         Setting("BrowserKey", new string('b', 64));
         Check(Call(mediaType, null, "Protocol", "pastdow://add?d=" + encoded) == null, "protocol rejects wrong key");
         Setting("BrowserKey", new string('a', 64));
@@ -275,7 +357,7 @@ public static class BrowserChecks
             Check(Request(listener, receiver, port, "POST", "/msg", Seal(new string('b', 64), "ping", null, Now(), Nonce())) == 403, "reject wrong key");
             Check(Request(listener, receiver, port, "GET", "/msg", null) == 404 && Request(listener, receiver, port, "POST", "/queue", body) == 404, "only sealed POST /msg");
             n = Nonce();
-            Check(Request(listener, receiver, port, "POST", "/msg", Seal(key, "ping", null, Now(), n)) == 200 && lastReply.Contains(Proof(key, n)), "sealed ping answered with nonce proof");
+            Check(Request(listener, receiver, port, "POST", "/msg", Seal(key, "ping", null, Now(), n)) == 200 && Verify(key, n, lastReply) && lastReply.Contains("\"vfmt\":\"mkv\"") && lastReply.Contains("\"afmt\":\"best\"") && lastReply.Contains("\"q\":0") && lastReply.Contains("\"mode\":\"video\""), "sealed ping returns signed defaults");
             Check(Request(listener, receiver, port, "POST", "/msg", Seal(key, "found", body, Now(), Nonce())) == 200 && received == 1 && queued == 0, "found without queue");
             string queueMsg = Seal(key, "queue", body, Now(), Nonce());
             Check(Request(listener, receiver, port, "POST", "/msg", queueMsg) == 200 && received == 2 && queued == 1, "queue");
@@ -289,6 +371,22 @@ public static class BrowserChecks
             Check(Request(listener, receiver, port, "POST", "/msg", tampered) == 403 && queued == 1, "tampered ciphertext rejected");
             Check(Request(listener, receiver, port, "POST", "/msg", Seal(key, "queue", Body("file:///bad", "https://subs.example/a.vtt"), Now(), Nonce())) == 400 && queued == 1, "endpoint validates URLs");
             Check(Request(listener, receiver, port, "POST", "/msg", "malformed") == 400, "malformed JSON");
+            Set(receiverType.GetField("Formats", Flags).GetValue(receiver), "Run", (Func<string, Task<string>>)FakeFormats);
+            n = Nonce();
+            Check(Request(listener, receiver, port, "POST", "/msg", Seal(key, "formats", null, Now(), n, null, "https://page.example/lookup")) == 200 && Verify(key, n, lastReply) && lastReply.Contains("\"heights\":[1080,720,480,360]"), "formats endpoint returns signed parsed fake data");
+            n = Nonce();
+            Check(Request(listener, receiver, port, "POST", "/msg", Seal(key, "formats", null, Now(), n, null, "https://page.example/lookup")) == 200 && Verify(key, n, lastReply), "cached formats response has fresh valid proof");
+            Check(Request(listener, receiver, port, "POST", "/msg", Seal(key, "formats", null, Now(), Nonce(), null, "file:///bad")) == 400, "formats rejects non-HTTP URL");
+            var options = js.Deserialize<Dictionary<string, object>>(body);
+            options["audio"] = true; options["q"] = 480; options["fmt"] = "flac";
+            Check(Request(listener, receiver, port, "POST", "/msg", Seal(key, "queue", js.Serialize(options), Now(), Nonce())) == 200, "queue custom audio options");
+            Check((bool)mediaType.GetProperty("audio").GetValue(lastMedia, null) && (int)mediaType.GetProperty("q").GetValue(lastMedia, null) == 0 && (string)mediaType.GetProperty("fmt").GetValue(lastMedia, null) == "flac", "queue callback receives validated audio options");
+            options["audio"] = false; options["q"] = 360; options["fmt"] = "mp4";
+            Check(Request(listener, receiver, port, "POST", "/msg", Seal(key, "queue", js.Serialize(options), Now(), Nonce())) == 200 && (int)mediaType.GetProperty("q").GetValue(lastMedia, null) == 360, "queue accepts 360P");
+            options["audio"] = "invalid"; options["q"] = 123; options["fmt"] = "exe";
+            Check(Request(listener, receiver, port, "POST", "/msg", Seal(key, "queue", js.Serialize(options), Now(), Nonce())) == 200, "queue invalid options fall back");
+            Check(!(bool)mediaType.GetProperty("audio").GetValue(lastMedia, null) && (int)mediaType.GetProperty("q").GetValue(lastMedia, null) == 0 && (string)mediaType.GetProperty("fmt").GetValue(lastMedia, null) == "mkv", "queue callback receives saved defaults for invalid options");
+
         }
         ((IDisposable)receiver).Dispose();
         Console.WriteLine("Browser: PAGE normal jobs, thumbnail and duration validation, header injection, job conversion, direct info JSON, subtitle headers, arguments, protocol auth, sidecar preservation and sealed HTTP endpoint (wrong key, replay, stale, pre-restart, tamper) passed");
