@@ -29,6 +29,9 @@ article small { display:block; color:#9a9a96; font-size:10px; overflow-wrap:anyw
 .pencil { padding:4px 8px; border-color:#2a2a2a; color:#cfcfcb; font-size:15px; line-height:1; }
 .pencil:hover { border-color:#f5f5f3; background:transparent; color:#f5f5f3; }
 input.rename { width:100%; margin:5px 0; font-size:12px; padding:5px 6px; }
+.format-actions { display:flex; gap:10px; align-items:center; justify-content:flex-end; margin-top:8px; }
+button.mini { padding:3px 9px; font-size:9px; letter-spacing:.14em; }
+button.mini.link { border:0; color:#9a9a96; padding:3px 2px; } button.mini.link:hover { background:none; color:#f5f5f3; }
 main { max-height:400px; overflow-y:auto; overflow-x:hidden; }
 main::-webkit-scrollbar { width:2px; } main::-webkit-scrollbar-thumb { background:#2a2a2a; }
 footer { border-top:1px solid #2a2a2a; padding-top:12px; margin-top:12px; }
