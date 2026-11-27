@@ -1,8 +1,9 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Builds app.ico (16..256): near-black plate with an off-white download arrow.
-  Entries below 256 as DIB (BMP), 256 as PNG: System.Drawing does not draw small PNG entries.
+  Builds app.ico (16..256) and the browser extension icons (extension\icons\16/32/48/128.png):
+  near-black plate with the PastDow orb, the home screen's orb resting on its horizon.
+  ico entries below 256 as DIB (BMP), 256 as PNG: System.Drawing does not draw small PNG entries.
 #>
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
@@ -30,27 +31,27 @@ function New-Frame([int]$s) {
     $rect = New-Object System.Drawing.RectangleF 0, 0, $s, $s
     $bg = New-Object System.Drawing.Drawing2D.LinearGradientBrush $rect, ([System.Drawing.Color]::FromArgb(30, 30, 30)), ([System.Drawing.Color]::FromArgb(12, 12, 12)), 90
     $g.FillPath($bg, $path)
-
-    $gold = [System.Drawing.Color]::FromArgb(238, 238, 236)
-    $goldDeep = [System.Drawing.Color]::FromArgb(196, 196, 192)
     # thicker strokes at small sizes so they stay legible
     $bw = [Math]::Max(1.0, 8 * $k)
     if ($s -le 32) { $bw = [Math]::Max(1.0, 1.2 * $s / 16) }
-    $pen = New-Object System.Drawing.Pen $gold, $bw
-    $g.DrawPath($pen, $path)
+    $edge = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(52, 52, 52)), $bw
+    $g.DrawPath($edge, $path)
 
-    $stroke = 26 * $k
-    if ($s -le 48) { $stroke = $s * 0.14 }
-    $ab = New-Object System.Drawing.Drawing2D.LinearGradientBrush $rect, $gold, $goldDeep, 90
-    $ap = New-Object System.Drawing.Pen $ab, $stroke
-    $ap.StartCap = 'Round'; $ap.EndCap = 'Round'; $ap.LineJoin = 'Round'
+    # the orb: a ring with a centre dot resting on the horizon line; strokes thicken at small sizes
+    $ink = [System.Drawing.Color]::FromArgb(244, 244, 242)
+    $line = [Math]::Max(1.6, 11 * $k)
+    if ($s -le 32) { $line = [Math]::Max(1.6, $s * 0.105) }
+    $pen = New-Object System.Drawing.Pen $ink, $line
+    $pen.StartCap = 'Round'; $pen.EndCap = 'Round'
     $cx = $s / 2.0
-    $g.DrawLine($ap, $cx, $s * 0.22, $cx, $s * 0.60)
-    $g.DrawLines($ap, [System.Drawing.PointF[]]@(
-        (New-Object System.Drawing.PointF ($s * 0.33), ($s * 0.46)),
-        (New-Object System.Drawing.PointF $cx, ($s * 0.62)),
-        (New-Object System.Drawing.PointF ($s * 0.67), ($s * 0.46))))
-    $g.DrawLine($ap, $s * 0.27, $s * 0.78, $s * 0.73, $s * 0.78)
+    $hy = $s * 0.66                     # horizon
+    $r = $s * 0.175                     # ring radius
+    $cy = $hy - $r - $line * 0.9        # the ring sits just above the line
+    $g.DrawLine($pen, $s * 0.19, $hy, $s * 0.81, $hy)
+    $g.DrawEllipse($pen, $cx - $r, $cy - $r, 2 * $r, 2 * $r)
+    $dot = [Math]::Max(1.2, $s * 0.045)
+    if ($s -le 20) { $dot = [Math]::Max(1.0, $s * 0.07) }
+    $g.FillEllipse((New-Object System.Drawing.SolidBrush $ink), $cx - $dot, $cy - $dot, 2 * $dot, 2 * $dot)
     $g.Dispose()
     return $bmp
 }
@@ -87,6 +88,9 @@ foreach ($s in $sizes) {
     if ($s -eq 256) { $bmp.Save((Join-Path (Split-Path -Parent $PSScriptRoot) 'tools\icon-preview.png')) }
     $bmp.Dispose()
 }
+
+$extIcons = Join-Path (Split-Path -Parent $PSScriptRoot) 'extension\icons'
+foreach ($s in 16, 32, 48, 128) { $png = New-Frame $s; $png.Save((Join-Path $extIcons "$s.png"), [System.Drawing.Imaging.ImageFormat]::Png); $png.Dispose() }
 
 $fs = [System.IO.File]::Create($out)
 $w = New-Object System.IO.BinaryWriter $fs
